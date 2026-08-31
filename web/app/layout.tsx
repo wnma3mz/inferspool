@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
+
 export const metadata: Metadata = {
   title: "InferSpool · AI compute workspace",
   description: "管理分布式 GPU 任务与算力",
-  icons: { icon: "/inferspool-logo.svg" },
+  icons: { icon: `${basePath}/inferspool-logo.svg` },
 };
 
 export default function RootLayout({

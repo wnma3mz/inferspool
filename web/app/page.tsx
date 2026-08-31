@@ -563,9 +563,10 @@ function SignIn() {
 }
 
 function BrandMark() {
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
   return (
     <span className="brand-mark" aria-hidden="true">
-      <img src="/inferspool-logo.svg" alt="" />
+      <img src={`${basePath}/inferspool-logo.svg`} alt="" />
     </span>
   );
 }

@@ -2,6 +2,8 @@
 
 云端长期在线。这里仅站在普通用户和 GPU 提供者两个视角。
 
+返回[项目首页](../README.md)。管理员操作见 [ADMIN.md](ADMIN.md)，私有部署见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 ## 普通用户
 
 安装管理员提供的二进制或 Release 安装脚本，然后验证：

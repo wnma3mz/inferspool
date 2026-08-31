@@ -1,5 +1,7 @@
 # Contributing
 
+Back to the [project README](../README.md).
+
 ## Repository layout
 
 ```text

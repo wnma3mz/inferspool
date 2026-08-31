@@ -7,7 +7,9 @@ InferSpool 面向少量受邀用户，不开放公共注册。当前支持：
 - `llm`：vLLM 兼容的文本与多图片输入
 - `image`：vLLM-Omni 图片生成
 - `video`：vLLM-Omni 视频生成
-- `tts`：vLLM-Omni 文本转语音（Text to Speech）
+- `tts`：vLLM-Omni 文本转语音
+
+网页版：<https://wnma3mz.github.io/inferspool/>
 
 ```console
 $ inferspool submit llm "描述这张图片" --image photo.jpg --wait
@@ -21,8 +23,6 @@ image    1/1        1        2
 llm      1/1        8        1
 tts      0/1        0        0
 ```
-
-日常使用见 [RUNBOOK.md](RUNBOOK.md)，系统设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 架构
 
@@ -108,65 +108,6 @@ INFERSPOOL_IMAGE_READY_TIMEOUT=900
 | `INFERSPOOL_<TYPE>_CWD` | 启动命令工作目录 |
 
 完整示例见 `cmd/inferspool-worker/.env.example`。
-
-## 管理员
-
-管理员可以在网页中管理全部任务、账号、共享 Worker、配额和过去 24 小时统计，也可使用 CLI：
-
-```bash
-inferspool admin user create user@example.com
-inferspool admin worker create home-4090 --name "Home 4090" --types llm,image,video,tts
-inferspool admin worker list
-inferspool admin worker rotate-token home-4090
-inferspool admin worker revoke home-4090
-```
-
-创建账号会一次性输出临时密码，创建或轮换 Worker 会一次性输出凭据。数据库只保存 Worker token 的 bcrypt hash。
-
-## 私有部署
-
-### 云端
-
-创建 Supabase 项目，关联项目并应用迁移：
-
-```bash
-supabase link --project-ref <project-ref>
-supabase db push
-supabase secrets set CRON_SECRET='<random>' WEBHOOK_ENCRYPTION_KEY='<different-random>'
-supabase functions deploy api --no-verify-jwt
-supabase functions deploy webhook-dispatch --no-verify-jwt
-supabase functions deploy cleanup-results --no-verify-jwt
-```
-
-这些函数自行验证用户 session、API key、Worker token 或维护 secret；产品凭据不全是 Supabase JWT，因此部署时使用 `--no-verify-jwt`。
-
-首次管理员需要进行一次数据库 bootstrap。用户 UUID 可从 Supabase Auth 用户列表获取：
-
-```sql
-insert into admins (user_id) values ('<auth-user-uuid>');
-```
-
-管理员表没有客户端写策略。完成 bootstrap 后，日常账号、任务和 Worker 管理都通过产品 API 或网页完成。
-
-启动网页：
-
-```bash
-cd web
-pnpm install --frozen-lockfile
-cp .env.example .env.local
-pnpm dev
-```
-
-私有部署发布自己的 CLI 和 Worker 时，通过 `INFERSPOOL_BUILD_URL` 与 `INFERSPOOL_BUILD_GATEWAY_KEY` 运行各自的 `build.sh`，将传输配置编译进二进制。官方 Release 工作流会构建五个平台、SHA256 校验、Sigstore bundle、安装脚本和 Homebrew formula。
-
-## 开发与测试
-
-```bash
-uv sync --frozen
-./test.sh
-```
-
-测试需要 PostgreSQL、Python 3.11+、Go 和 pnpm，使用真实 Postgres 与真实 HTTP，不需要 GPU。测试覆盖 SQL 队列语义、RLS、并发、产品 API、Go CLI、Go Worker、Worker 故障恢复和浏览器 E2E。环境与单独执行方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可
 

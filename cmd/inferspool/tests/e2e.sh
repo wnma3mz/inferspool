@@ -61,7 +61,11 @@ export NO_COLOR=1
 # 1. config
 out=$("$BIN" config advanced show)
 [[ "$out" != *"$ALICE_KEY"* ]]; check $? "config show never prints the full key"
-perms=$(stat -f '%Lp' "$CFG/config.json")
+if stat -f '%Lp' "$CFG/config.json" >/dev/null 2>&1; then
+  perms=$(stat -f '%Lp' "$CFG/config.json")
+else
+  perms=$(stat -c '%a' "$CFG/config.json")
+fi
 [ "$perms" = "600" ]; check $? "config file is chmod 600 (perms=$perms)"
 
 # 2. submit

@@ -1,7 +1,7 @@
 # InferSpool architecture
 
 This document records the invariants behind the implementation. The user-facing
-entry points are [README.md](../README.md) and [RUNBOOK.md](../RUNBOOK.md).
+entry points are the [project README](../README.md) and [runbook](RUNBOOK.md).
 
 ## Components and trust boundaries
 

@@ -3,42 +3,115 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$REF_TYPE" = "tag" ] || { echo "Release workflow must run on a tag" >&2; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Tag must match vX.Y.Z" >&2; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
           go-version-file: cmd/inferspool-worker/go.mod
           cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.18"
       - uses: sigstore/cosign-installer@v3.10.0
-      - name: Build release binaries
+      - name: Test release sources
+        run: |
+          uv sync --frozen
+          (cd cmd/inferspool && go test -race ./...)
+          (cd cmd/inferspool-worker && go test -race ./...)
+          scripts/tests/install_test.sh
+      - name: Build release assets
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.number }}
           INFERSPOOL_BUILD_RELEASE_URL: https://github.com/${{ github.repository }}/releases/latest/download
         run: |
-          version="${VERSION#v}"
-          (cd cmd/inferspool && ./build.sh "$version")
-          (cd cmd/inferspool-worker && ./build.sh "$version")
+          (cd cmd/inferspool && ./build.sh "$VERSION")
+          (cd cmd/inferspool-worker && ./build.sh "$VERSION")
           mkdir release
           cp cmd/inferspool/dist/inferspool-* release/
           cp cmd/inferspool-worker/dist/inferspool-worker-* release/
-          printf '%s\n' "$version" > release/VERSION
+          printf '%s\n' "$VERSION" > release/VERSION
           (cd release && sha256sum inferspool-* VERSION > SHA256SUMS)
-          arm=$(awk '$2=="inferspool-darwin-arm64"{print $1}' release/SHA256SUMS)
-          amd=$(awk '$2=="inferspool-darwin-amd64"{print $1}' release/SHA256SUMS)
-          sed -e "s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" -e "s/@VERSION@/$version/g" -e "s/@DARWIN_ARM64_SHA@/$arm/g" -e "s/@DARWIN_AMD64_SHA@/$amd/g" packaging/homebrew/inferspool.rb.tmpl > release/inferspool.rb
+          darwin_arm=$(awk '$2=="inferspool-darwin-arm64"{print $1}' release/SHA256SUMS)
+          darwin_amd=$(awk '$2=="inferspool-darwin-amd64"{print $1}' release/SHA256SUMS)
+          linux_arm=$(awk '$2=="inferspool-linux-arm64"{print $1}' release/SHA256SUMS)
+          linux_amd=$(awk '$2=="inferspool-linux-amd64"{print $1}' release/SHA256SUMS)
+          sed -e "s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" -e "s/@VERSION@/$VERSION/g" -e "s/@DARWIN_ARM64_SHA@/$darwin_arm/g" -e "s/@DARWIN_AMD64_SHA@/$darwin_amd/g" -e "s/@LINUX_ARM64_SHA@/$linux_arm/g" -e "s/@LINUX_AMD64_SHA@/$linux_amd/g" packaging/homebrew/inferspool.rb.tmpl > release/inferspool.rb
           sed "s#@GITHUB_REPOSITORY@#${GITHUB_REPOSITORY}#g" scripts/install.sh > release/install.sh
           sed "s#@GITHUB_REPOSITORY@#${GITHUB_REPOSITORY}#g" scripts/install.ps1 > release/install.ps1
       - name: Sign checksum manifest
         run: cosign sign-blob --yes --bundle release/SHA256SUMS.bundle release/SHA256SUMS
+      - name: Save Homebrew Formula for the tap job
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: release/inferspool.rb
+          retention-days: 7
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" release/* --generate-notes --verify-tag
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$TAG" release/* --generate-notes --verify-tag
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require tap write token
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: test -n "$TAP_TOKEN" || { echo "Add the HOMEBREW_TAP_TOKEN repository secret with Contents write access to wnma3mz/homebrew-tap" >&2; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          repository: wnma3mz/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - uses: actions/download-artifact@v4
+        with:
+          name: homebrew-formula
+          path: formula-artifact
+      - name: Publish Formula to wnma3mz/homebrew-tap
+        working-directory: homebrew-tap
+        run: |
+          install -m 0644 ../formula-artifact/inferspool.rb Formula/inferspool.rb
+          git add Formula/inferspool.rb
+          git diff --cached --quiet && { echo "Homebrew Formula is already current"; exit 0; }
+          version=$(awk -F'"' '/^[[:space:]]*version / { print $2 }' Formula/inferspool.rb)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "inferspool ${version}"
+          git push

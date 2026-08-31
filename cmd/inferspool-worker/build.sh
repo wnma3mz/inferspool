@@ -17,6 +17,7 @@ targets=(
   "linux amd64"
   "linux arm64"
   "windows amd64"
+  "windows arm64"
 )
 
 echo "building inferspool-worker $VERSION"

@@ -2,7 +2,7 @@ class Inferspool < Formula
   desc "Submit AI jobs to a private GPU queue"
   homepage "https://github.com/@REPOSITORY@"
   version "@VERSION@"
-  license "Apache-2.0"
+  license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
@@ -14,8 +14,18 @@ class Inferspool < Formula
     end
   end
 
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/@REPOSITORY@/releases/download/v@VERSION@/inferspool-linux-arm64"
+      sha256 "@LINUX_ARM64_SHA@"
+    else
+      url "https://github.com/@REPOSITORY@/releases/download/v@VERSION@/inferspool-linux-amd64"
+      sha256 "@LINUX_AMD64_SHA@"
+    end
+  end
+
   def install
-    bin.install Dir["inferspool-darwin-*"][0] => "inferspool"
+    bin.install Dir["inferspool-*"][0] => "inferspool"
   end
 
   test do

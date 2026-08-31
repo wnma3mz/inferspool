@@ -1,0 +1,61 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/pages.yml"
+      - "web/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: github-pages
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_API_URL: ${{ vars.NEXT_PUBLIC_API_URL }}
+      NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/configure-pages@v6
+      - name: Validate public web configuration
+        run: |
+          test -n "$NEXT_PUBLIC_SUPABASE_URL" || { echo "Missing Actions variable NEXT_PUBLIC_SUPABASE_URL" >&2; exit 1; }
+          test -n "$NEXT_PUBLIC_SUPABASE_ANON_KEY" || { echo "Missing Actions variable NEXT_PUBLIC_SUPABASE_ANON_KEY" >&2; exit 1; }
+      - name: Install dependencies
+        run: cd web && pnpm install --frozen-lockfile
+      - name: Type-check and build
+        run: cd web && pnpm run typecheck && pnpm run build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

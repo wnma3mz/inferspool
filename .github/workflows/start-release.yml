@@ -1,0 +1,49 @@
+name: start release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version, for example 1.2.3"
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: start-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create tag and start the signed release workflow
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ "$REF_NAME" = "$DEFAULT_BRANCH" ] || { echo "Run releases from $DEFAULT_BRANCH" >&2; exit 1; }
+          tag="v${INPUT_VERSION#v}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Version must match X.Y.Z" >&2; exit 1; }
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists" >&2
+            exit 1
+          fi
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)" ] || { echo "Tag $tag already points to another commit" >&2; exit 1; }
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" -m "InferSpool $tag"
+            git push origin "$tag"
+          fi
+          gh workflow run release.yml --ref "$tag"
+          echo "Started the signed release workflow for $tag"
