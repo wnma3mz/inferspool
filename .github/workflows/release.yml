@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/inferspool-worker/go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@v3.10.0
+      - name: Build release binaries
+        env:
+          VERSION: ${{ github.ref_name }}
+          INFERSPOOL_BUILD_RELEASE_URL: https://github.com/${{ github.repository }}/releases/latest/download
+        run: |
+          version="${VERSION#v}"
+          (cd cmd/inferspool && ./build.sh "$version")
+          (cd cmd/inferspool-worker && ./build.sh "$version")
+          mkdir release
+          cp cmd/inferspool/dist/inferspool-* release/
+          cp cmd/inferspool-worker/dist/inferspool-worker-* release/
+          printf '%s\n' "$version" > release/VERSION
+          (cd release && sha256sum inferspool-* VERSION > SHA256SUMS)
+          arm=$(awk '$2=="inferspool-darwin-arm64"{print $1}' release/SHA256SUMS)
+          amd=$(awk '$2=="inferspool-darwin-amd64"{print $1}' release/SHA256SUMS)
+          sed -e "s#@REPOSITORY@#${GITHUB_REPOSITORY}#g" -e "s/@VERSION@/$version/g" -e "s/@DARWIN_ARM64_SHA@/$arm/g" -e "s/@DARWIN_AMD64_SHA@/$amd/g" packaging/homebrew/inferspool.rb.tmpl > release/inferspool.rb
+          sed "s#@GITHUB_REPOSITORY@#${GITHUB_REPOSITORY}#g" scripts/install.sh > release/install.sh
+          sed "s#@GITHUB_REPOSITORY@#${GITHUB_REPOSITORY}#g" scripts/install.ps1 > release/install.ps1
+      - name: Sign checksum manifest
+        run: cosign sign-blob --yes --bundle release/SHA256SUMS.bundle release/SHA256SUMS
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" release/* --generate-notes --verify-tag

@@ -1,0 +1,173 @@
+# InferSpool
+
+在任何地方提交 AI 任务，在自己的 GPU 机器上执行。GPU 端只需要出站 HTTPS，不需要公网 IP、端口转发或打洞；机器离线时任务留在队列中，执行中断后可由租约机制恢复。
+
+InferSpool 面向少量受邀用户，不开放公共注册。当前支持：
+
+- `llm`：vLLM 兼容的文本与多图片输入
+- `image`：vLLM-Omni 图片生成
+- `video`：vLLM-Omni 视频生成
+- `tts`：vLLM-Omni 文本转语音（Text to Speech）
+
+```console
+$ inferspool submit llm "描述这张图片" --image photo.jpg --wait
+画面中……
+
+$ inferspool status
+1 worker(s) online · 3 queued · 1 running
+
+TYPE     BACKENDS   SLOTS    QUEUED
+image    1/1        1        2
+llm      1/1        8        1
+tts      0/1        0        0
+```
+
+日常使用见 [RUNBOOK.md](RUNBOOK.md)，系统设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 架构
+
+```text
+用户端（Go CLI / Web）
+          │ HTTPS
+          ▼
+云端（Supabase + Next.js）
+          ▲
+          │ HTTPS，仅出站
+GPU 端（Go Worker → vLLM / vLLM-Omni）
+```
+
+- `cmd/inferspool/`：用户 CLI，单个 Go 二进制
+- `cmd/inferspool-worker/`：GPU Worker，探活、领取、执行与传输任务
+- `supabase/`：Postgres schema、RLS、RPC、Storage 与 Edge Functions
+- `web/`：Next.js 用户界面和管理员界面
+- `scripts/`、`packaging/`：安装脚本和发布包模板
+
+Postgres 中的 `jobs` 表同时保存队列状态和用户历史，是任务的唯一事实来源。CLI 与 Worker 通过稳定的 `/v1` 产品 API 工作；浏览器使用 Supabase Auth 会话和 Realtime 私有频道。Worker 不加载模型，只调用 GPU 机器上已有的 HTTP 推理服务。
+
+## 用户快速开始
+
+管理员创建账号后会提供邮箱和临时密码：
+
+```bash
+inferspool login user@example.com
+inferspool password                         # 首次登录更换临时密码
+
+inferspool submit llm "解释数据库租约" --wait
+inferspool submit llm "比较两张图" --image a.jpg --image https://example.com/b.png -w
+inferspool submit image "一只猫骑自行车" --size 1024x1024
+inferspool submit video "城市上空的云" --seconds 5 --fps 24
+inferspool submit tts "请朗读这段话" --voice default --format wav
+
+inferspool status
+inferspool list --status failed --search 租约
+inferspool retry <job-id>
+inferspool keep <job-id>
+inferspool delete <job-id>
+```
+
+首次改密后 CLI 会自动创建本机 API key。脚本和 CI 可设置 `INFERSPOOL_API_KEY`，不需要保存账号密码。`--wait` 成功时退出 0，失败时退出 1。
+
+用户只选择任务类型和通用生成参数，不指定具体模型；模型由执行任务的 GPU Worker 及其本地后端决定。
+
+## GPU Worker 快速开始
+
+管理员创建 Worker 后会一次性提供 `worker.env`。补上本机实际提供的推理端点：
+
+```env
+INFERSPOOL_WORKER_ID=home-4090
+INFERSPOOL_WORKER_TOKEN=<token>
+INFERSPOOL_LLM_URL=http://127.0.0.1:8000
+INFERSPOOL_IMAGE_URL=http://127.0.0.1:8091
+```
+
+```bash
+inferspool-worker doctor --env-file worker.env
+inferspool-worker run --env-file worker.env
+```
+
+默认由 GPU 用户自行管理 vLLM / vLLM-Omni。也可以为某种任务配置按需启动：
+
+```env
+INFERSPOOL_IMAGE_LAUNCH=vllm serve /path/to/image-model --omni --port 8091
+INFERSPOOL_IMAGE_IDLE_TIMEOUT=600
+INFERSPOOL_IMAGE_READY_TIMEOUT=900
+```
+
+没有配置 `LAUNCH` 时，Worker 只探活，不会启动或停止后端。默认启用单卡独占保护：启动一个受管后端前会停止另一个，避免消费级 GPU 同时加载多个模型导致 OOM。显存充足时可设置 `INFERSPOOL_EXCLUSIVE_GPU=0`。
+
+每种类型支持以下变量，其中 `<TYPE>` 为 `LLM`、`IMAGE`、`VIDEO` 或 `TTS`：
+
+| 变量 | 作用 |
+|---|---|
+| `INFERSPOOL_<TYPE>_URL` | 本地推理服务地址 |
+| `INFERSPOOL_<TYPE>_CAPACITY` | 可接受的并发任务数 |
+| `INFERSPOOL_<TYPE>_LAUNCH` | 可选的启动命令 |
+| `INFERSPOOL_<TYPE>_STOP` | 外部进程管理器对应的停止命令 |
+| `INFERSPOOL_<TYPE>_IDLE_TIMEOUT` | 空闲停止秒数，`0` 表示常驻 |
+| `INFERSPOOL_<TYPE>_READY_TIMEOUT` | 启动后的就绪等待秒数 |
+| `INFERSPOOL_<TYPE>_CWD` | 启动命令工作目录 |
+
+完整示例见 `cmd/inferspool-worker/.env.example`。
+
+## 管理员
+
+管理员可以在网页中管理全部任务、账号、共享 Worker、配额和过去 24 小时统计，也可使用 CLI：
+
+```bash
+inferspool admin user create user@example.com
+inferspool admin worker create home-4090 --name "Home 4090" --types llm,image,video,tts
+inferspool admin worker list
+inferspool admin worker rotate-token home-4090
+inferspool admin worker revoke home-4090
+```
+
+创建账号会一次性输出临时密码，创建或轮换 Worker 会一次性输出凭据。数据库只保存 Worker token 的 bcrypt hash。
+
+## 私有部署
+
+### 云端
+
+创建 Supabase 项目，关联项目并应用迁移：
+
+```bash
+supabase link --project-ref <project-ref>
+supabase db push
+supabase secrets set CRON_SECRET='<random>' WEBHOOK_ENCRYPTION_KEY='<different-random>'
+supabase functions deploy api --no-verify-jwt
+supabase functions deploy webhook-dispatch --no-verify-jwt
+supabase functions deploy cleanup-results --no-verify-jwt
+```
+
+这些函数自行验证用户 session、API key、Worker token 或维护 secret；产品凭据不全是 Supabase JWT，因此部署时使用 `--no-verify-jwt`。
+
+首次管理员需要进行一次数据库 bootstrap。用户 UUID 可从 Supabase Auth 用户列表获取：
+
+```sql
+insert into admins (user_id) values ('<auth-user-uuid>');
+```
+
+管理员表没有客户端写策略。完成 bootstrap 后，日常账号、任务和 Worker 管理都通过产品 API 或网页完成。
+
+启动网页：
+
+```bash
+cd web
+pnpm install --frozen-lockfile
+cp .env.example .env.local
+pnpm dev
+```
+
+私有部署发布自己的 CLI 和 Worker 时，通过 `INFERSPOOL_BUILD_URL` 与 `INFERSPOOL_BUILD_GATEWAY_KEY` 运行各自的 `build.sh`，将传输配置编译进二进制。官方 Release 工作流会构建五个平台、SHA256 校验、Sigstore bundle、安装脚本和 Homebrew formula。
+
+## 开发与测试
+
+```bash
+uv sync --frozen
+./test.sh
+```
+
+测试需要 PostgreSQL、Python 3.11+、Go 和 pnpm，使用真实 Postgres 与真实 HTTP，不需要 GPU。测试覆盖 SQL 队列语义、RLS、并发、产品 API、Go CLI、Go Worker、Worker 故障恢复和浏览器 E2E。环境与单独执行方式见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。

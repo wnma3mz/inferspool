@@ -1,0 +1,103 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Real Postgres: the queue's correctness lives in SQL (FOR UPDATE SKIP
+    # LOCKED, leases, RLS), so a mocked database would test nothing.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      INFERSPOOL_TEST_DB: inferspool_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.18"
+
+      - uses: actions/setup-go@v5
+        with:
+          # CLI and worker intentionally use the same Go version.
+          go-version-file: cmd/inferspool-worker/go.mod
+          # The CLI is stdlib-only, so there is no go.sum to key a cache on.
+          cache: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Install Python test fixtures
+        run: uv sync --frozen
+
+      - name: Install web deps
+        run: cd web && pnpm install --frozen-lockfile
+
+      - name: Install browser runtime
+        run: cd web && pnpm exec playwright install --with-deps chromium
+
+      # The build prerenders the page, which constructs a Supabase client, so
+      # it needs placeholder values even though CI makes no network calls.
+      - name: Web env placeholders
+        run: cp web/.env.example web/.env.local
+
+      - name: Run the full suite
+        run: ./test.sh
+
+  build-binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cmd/inferspool-worker/go.mod
+          cache: false
+
+      # Proves the shipped artifact cross-compiles for every platform we
+      # publish, not just the CI runner's.
+      - name: Cross-compile
+        run: |
+          (cd cmd/inferspool && ./build.sh "ci-$(git rev-parse --short HEAD)")
+          (cd cmd/inferspool-worker && ./build.sh "ci-$(git rev-parse --short HEAD)")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inferspool-binaries
+          path: |
+            cmd/inferspool/dist/
+            cmd/inferspool-worker/dist/
+          retention-days: 14

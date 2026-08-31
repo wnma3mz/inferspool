@@ -1,0 +1,58 @@
+# Local configuration and secrets. Example templates remain versioned.
+.env
+.env.*
+*.env
+!.env.example
+!**/.env.example
+
+# Operating systems and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and runtime state
+*.log
+*.pid
+*.pid.lock
+*.tmp
+
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Go build and profiling output
+*.test
+*.prof
+coverage.out
+cmd/inferspool/dist/
+cmd/inferspool/inferspool
+cmd/inferspool/*-dbg
+cmd/inferspool/*.exe
+cmd/inferspool-worker/dist/
+cmd/inferspool-worker/inferspool-worker
+cmd/inferspool-worker/*.exe
+
+# Node / Next.js / Playwright
+node_modules/
+.pnpm-store/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+test-results/
+playwright-report/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*

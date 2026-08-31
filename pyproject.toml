@@ -1,0 +1,9 @@
+[project]
+name = "inferspool-test-fixtures"
+version = "0.1.0"
+description = "Python fixtures for InferSpool integration tests"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
