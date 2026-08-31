@@ -4,13 +4,13 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icons";
 import { usePreferences } from "./Preferences";
 import { submitJob, uploadInputImage, useSubmitting } from "../lib/useJobs";
-import type { JobType } from "../lib/types";
+import { JOB_TYPE_LABELS, type JobType } from "../lib/types";
 
 const TYPES: { value: JobType; label: [string, string]; icon: string }[] = [
-  { value: "llm", label: ["文本", "Text"], icon: "text" },
-  { value: "image", label: ["图片", "Image"], icon: "image" },
-  { value: "video", label: ["视频", "Video"], icon: "video" },
-  { value: "tts", label: ["文本转语音", "Text to Speech"], icon: "audio" },
+  { value: "llm", label: JOB_TYPE_LABELS.llm, icon: "text" },
+  { value: "image", label: JOB_TYPE_LABELS.image, icon: "image" },
+  { value: "video", label: JOB_TYPE_LABELS.video, icon: "video" },
+  { value: "tts", label: JOB_TYPE_LABELS.tts, icon: "audio" },
 ];
 
 const PLACEHOLDERS: Record<JobType, [string, string]> = {
@@ -94,11 +94,11 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
     <section id="submit" className="surface composer">
       <div className="section-heading composer-heading">
         <div>
-          <span className="section-kicker">{zh ? "创建" : "Create"}</span>
-          <h2>{zh ? "提交新任务" : "Submit a new task"}</h2>
+          <span className="section-kicker">{zh ? "新任务" : "New job"}</span>
+          <h2>{zh ? "选择任务类型并提交" : "Choose a job type and submit"}</h2>
         </div>
         <span className="secure-label">
-          <Icon name="shield" /> {zh ? "传输加密" : "Encrypted in transit"}
+          <Icon name="shield" /> {zh ? "加密传输" : "Encrypted in transit"}
         </span>
       </div>
 
@@ -154,7 +154,7 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
           id="job-prompt"
           value={text}
           rows={4}
-          aria-label={zh ? "任务提示词" : "Task prompt"}
+          aria-label={zh ? "任务内容" : "Job input"}
           placeholder={PLACEHOLDERS[type][zh ? 0 : 1]}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
@@ -176,7 +176,7 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
                 step="0.1"
               />
               <Parameter
-                label={zh ? "最大 Token" : "Max tokens"}
+                label={zh ? "最大输出长度" : "Maximum output"}
                 value={maxTokens}
                 setValue={setMaxTokens}
                 type="number"
@@ -300,7 +300,9 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {submitted && (
         <div className="alert alert-success" role="status">
-          {zh ? "任务已加入队列。" : "Task added to the queue."}
+          {zh
+            ? "任务已提交，正在等待 GPU 节点领取。"
+            : "Job submitted and waiting for a GPU worker."}
         </div>
       )}
     </section>

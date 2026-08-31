@@ -157,15 +157,19 @@ async function actor(
     userId = data.user.id;
     jwt = token;
   }
-  const admin = await isAdmin(userId);
+  const [admin, profileResult] = await Promise.all([
+    isAdmin(userId),
+    service.from("user_profiles").select(
+      "status,force_password_change",
+    ).eq("user_id", userId).maybeSingle(),
+  ]);
   if (requireAdmin && !admin) {
     throw Object.assign(new Error("administrator access required"), {
       status: 403,
     });
   }
-  const { data: profile } = await service.from("user_profiles").select(
-    "status,force_password_change",
-  ).eq("user_id", userId).maybeSingle();
+  if (profileResult.error) throw profileResult.error;
+  const profile = profileResult.data;
   if (profile?.status === "disabled") {
     throw Object.assign(new Error("account disabled"), { status: 403 });
   }
@@ -379,8 +383,12 @@ async function accountRoutes(request: Request, path: string) {
         "password must be at least 8 characters",
       );
     }
-    const client = userClient(a.jwt);
-    const { error } = await client.auth.updateUser({
+    // The JWT was already verified by actor(). A Supabase client configured
+    // with an Authorization header can query as that user, but auth.updateUser
+    // still expects an in-memory Auth session and otherwise fails with
+    // "Auth session missing!". Update only the verified actor through the
+    // service-role admin API instead.
+    const { error } = await service.auth.admin.updateUserById(a.userId, {
       password: input.password,
     });
     if (error) throw error;
@@ -563,7 +571,9 @@ async function jobRoutes(request: Request, url: URL, path: string) {
     if (more) rows.pop();
     return json({
       data: rows,
-      next_cursor: more && rows.length ? encodeCursor(rows.at(-1)) : null,
+      next_cursor: more && rows.length
+        ? encodeCursor(rows[rows.length - 1]!)
+        : null,
     });
   }
   const match = path.match(
@@ -898,7 +908,9 @@ async function adminRoutes(request: Request, path: string) {
       Math.max(Number(url.searchParams.get("limit") ?? 200), 1),
       500,
     );
-    let query = service.from("jobs").select("*").is("deleted_at", null).order(
+    let query = service.from("jobs").select(
+      "id,user_id,type,status,payload,worker_id,created_at",
+    ).is("deleted_at", null).order(
       "created_at",
       { ascending: false },
     ).order("id", { ascending: false }).limit(limit + 1);
@@ -908,6 +920,8 @@ async function adminRoutes(request: Request, path: string) {
     if (type) query = query.eq("type", type);
     const userId = url.searchParams.get("user_id");
     if (userId) query = query.eq("user_id", userId);
+    const workerId = url.searchParams.get("worker_id");
+    if (workerId) query = query.eq("worker_id", workerId);
     const search = url.searchParams.get("search");
     if (search) {
       query = query.or(
@@ -937,7 +951,9 @@ async function adminRoutes(request: Request, path: string) {
     if (more) rows.pop();
     return json({
       data: rows,
-      next_cursor: more && rows.length ? encodeCursor(rows.at(-1)) : null,
+      next_cursor: more && rows.length
+        ? encodeCursor(rows[rows.length - 1]!)
+        : null,
     });
   }
   const adminJobMatch = path.match(

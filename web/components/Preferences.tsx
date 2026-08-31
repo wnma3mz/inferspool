@@ -5,7 +5,6 @@ import {
   type ReactNode,
   useContext,
   useEffect,
-  useRef,
   useState,
 } from "react";
 import { Icon } from "./Icons";
@@ -87,102 +86,47 @@ export function usePreferences() {
 
 export function PreferenceControls({ compact = false }: { compact?: boolean }) {
   const { language, setLanguage, theme, setTheme } = usePreferences();
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [open]);
+  const nextLanguage: Language = language === "zh" ? "en" : "zh";
+  const nextTheme: Theme = theme === "system"
+    ? "light"
+    : theme === "light"
+    ? "dark"
+    : "system";
+  const themeLabel = theme === "system"
+    ? (language === "zh" ? "跟随系统" : "System")
+    : theme === "light"
+    ? (language === "zh" ? "亮色" : "Light")
+    : (language === "zh" ? "暗色" : "Dark");
 
   return (
-    <div
-      ref={root}
-      className={`preference-controls ${compact ? "compact" : ""}`}
-    >
+    <div className={`preference-set ${compact ? "compact" : ""}`}>
       <button
-        className="preference-trigger"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label={language === "zh" ? "语言与主题" : "Language and theme"}
+        className="preference-trigger language-trigger"
+        onClick={() => setLanguage(nextLanguage)}
+        aria-label={language === "zh" ? "切换为英文" : "Switch to Chinese"}
       >
-        <Icon
-          name={theme === "dark"
-            ? "moon"
-            : theme === "light"
-            ? "sun"
-            : "monitor"}
-        />
-        {!compact && (
-          <span>{language === "zh" ? "偏好设置" : "Preferences"}</span>
-        )}
-        <Icon name="chevron" className={open ? "rotated" : ""} />
+        <Icon name="globe" />
+        <span>{language === "zh" ? "中文" : "English"}</span>
       </button>
-      {open && (
-        <div className="preference-menu" role="menu">
-          <div className="preference-group">
-            <span>
-              <Icon name="globe" />
-              {language === "zh" ? "界面语言" : "Language"}
-            </span>
-            <div className="choice-grid two">
-              <button
-                className={language === "zh" ? "active" : ""}
-                onClick={() => setLanguage("zh")}
-              >
-                中文
-              </button>
-              <button
-                className={language === "en" ? "active" : ""}
-                onClick={() => setLanguage("en")}
-              >
-                English
-              </button>
-            </div>
-          </div>
-          <div className="preference-group">
-            <span>
-              <Icon name="sun" />
-              {language === "zh" ? "显示主题" : "Theme"}
-            </span>
-            <div className="choice-grid three">
-              <button
-                className={theme === "system" ? "active" : ""}
-                onClick={() => setTheme("system")}
-              >
-                <Icon name="monitor" />
-                {language === "zh" ? "系统" : "System"}
-              </button>
-              <button
-                className={theme === "light" ? "active" : ""}
-                onClick={() => setTheme("light")}
-              >
-                <Icon name="sun" />
-                {language === "zh" ? "浅色" : "Light"}
-              </button>
-              <button
-                className={theme === "dark" ? "active" : ""}
-                onClick={() => setTheme("dark")}
-              >
-                <Icon name="moon" />
-                {language === "zh" ? "深色" : "Dark"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <div className="preference-controls">
+        <button
+          className="preference-trigger theme-trigger"
+          onClick={() => setTheme(nextTheme)}
+          aria-label={language === "zh"
+            ? `显示主题：${themeLabel}，点击切换`
+            : `Display theme: ${themeLabel}; click to switch`}
+        >
+          <Icon
+            name={theme === "dark"
+              ? "moon"
+              : theme === "light"
+              ? "sun"
+              : "monitor"}
+          />
+          {!compact && <span>{themeLabel}</span>}
+        </button>
+      </div>
     </div>
   );
 }

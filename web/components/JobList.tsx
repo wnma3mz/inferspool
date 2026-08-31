@@ -10,13 +10,15 @@ import {
   retryJob,
   signedResultUrl,
 } from "../lib/useJobs";
-import { isTerminal, type Job, type ResultFile } from "../lib/types";
+import {
+  isTerminal,
+  type Job,
+  JOB_TYPE_LABELS,
+  type ResultFile,
+} from "../lib/types";
 
 const TYPE_LABELS: Record<Job["type"], [string, string]> = {
-  llm: ["文本", "Text"],
-  image: ["图片", "Image"],
-  video: ["视频", "Video"],
-  tts: ["文本转语音", "Text to Speech"],
+  ...JOB_TYPE_LABELS,
   embed: ["历史任务", "Legacy task"],
 };
 
@@ -206,8 +208,8 @@ export function JobRow(
             disabled={!!acting}
           >
             {job.keep_result
-              ? (zh ? "取消保留" : "Unkeep")
-              : (zh ? "保留" : "Keep")}
+              ? (zh ? "取消长期保留" : "Remove retention")
+              : (zh ? "长期保留" : "Keep indefinitely")}
           </button>
         )}
         {isTerminal(job.status) && (
@@ -343,11 +345,11 @@ export function JobList(
         <span>
           <Icon name="spark" />
         </span>
-        <strong>{zh ? "暂无任务" : "No tasks yet"}</strong>
+        <strong>{zh ? "还没有任务" : "No jobs yet"}</strong>
         <p>
           {zh
-            ? "你提交的任务和结果会显示在这里。"
-            : "Your submitted tasks and results will appear here."}
+            ? "提交后，进度和结果会显示在这里。"
+            : "Submit a job to see its progress and results here."}
         </p>
       </div>
     );

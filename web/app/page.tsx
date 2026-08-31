@@ -15,6 +15,15 @@ import { SubmitForm } from "../components/SubmitForm";
 import { api, jsonBody } from "../lib/api";
 import { supabase } from "../lib/supabase";
 import { exportJobs, type JobFilters, useJobs } from "../lib/useJobs";
+import { JOB_TYPE_LABELS, type JobType } from "../lib/types";
+
+const JOB_STATUS_OPTIONS = [
+  ["queued", "排队中", "Queued"],
+  ["running", "运行中", "Running"],
+  ["succeeded", "已完成", "Completed"],
+  ["failed", "失败", "Failed"],
+  ["canceled", "已取消", "Canceled"],
+] as const;
 
 export default function Home() {
   return (
@@ -31,11 +40,13 @@ function Workspace() {
   const [checking, setChecking] = useState(true);
   const [accountReady, setAccountReady] = useState(false);
   const [forcePassword, setForcePassword] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [view, setView] = useState<"workspace" | "admin">("workspace");
   const [filters, setFilters] = useState<JobFilters>({});
   const { jobs, loading, error, refresh, nextCursor, loadMore } = useJobs(
     30,
     filters,
-    email !== null && accountReady && !forcePassword,
+    email !== null && accountReady && !forcePassword && view === "workspace",
   );
 
   useEffect(() => {
@@ -45,6 +56,10 @@ function Workspace() {
     });
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
       setEmail(session?.user?.email ?? null);
+      if (!session) {
+        setIsAdmin(false);
+        setView("workspace");
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -57,15 +72,20 @@ function Workspace() {
       return;
     }
     setAccountReady(false);
-    void api<{ profile?: { force_password_change?: boolean } }>("/me")
+    void api<{
+      admin?: boolean;
+      profile?: { force_password_change?: boolean };
+    }>("/me")
       .then((me) => {
         if (active) {
+          setIsAdmin(me.admin === true);
           setForcePassword(me.profile?.force_password_change === true);
           setAccountReady(true);
         }
       })
       .catch(() => {
         if (active) {
+          setIsAdmin(false);
           setEmail(null);
           setAccountReady(true);
         }
@@ -111,26 +131,48 @@ function Workspace() {
         </div>
         <nav
           className="sidebar-nav"
-          aria-label={zh ? "主导航" : "Main navigation"}
+          aria-label={view === "admin"
+            ? (zh ? "管理导航" : "Admin navigation")
+            : (zh ? "主导航" : "Main navigation")}
         >
-          <a className="nav-item active" href="#workspace">
-            <Icon name="grid" /> {zh ? "工作区" : "Workspace"}
-          </a>
-          <a className="nav-item" href="#submit">
-            <Icon name="spark" /> {zh ? "新建任务" : "New task"}
-          </a>
-          <a className="nav-item" href="#history">
-            <Icon name="history" /> {zh ? "任务历史" : "Task history"}
-          </a>
+          {view === "admin"
+            ? (
+              <>
+                <button className="nav-item active" type="button">
+                  <Icon name="admin" /> {zh ? "管理中心" : "Admin center"}
+                </button>
+                <button
+                  className="nav-item"
+                  type="button"
+                  onClick={() => setView("workspace")}
+                >
+                  <Icon name="arrow" />{" "}
+                  {zh ? "返回工作区" : "Back to workspace"}
+                </button>
+              </>
+            )
+            : (
+              <>
+                <a className="nav-item active" href="#workspace">
+                  <Icon name="grid" /> {zh ? "工作区" : "Workspace"}
+                </a>
+                <a className="nav-item" href="#submit">
+                  <Icon name="spark" /> {zh ? "新建任务" : "New task"}
+                </a>
+                <a className="nav-item" href="#history">
+                  <Icon name="history" /> {zh ? "任务历史" : "Task history"}
+                </a>
+              </>
+            )}
         </nav>
         <div className="sidebar-foot">
           <div className="sidebar-foot-label">
-            {zh ? "分布式算力" : "Distributed compute"}
+            {zh ? "闲置 GPU 算力池" : "Idle GPU pool"}
           </div>
           <div className="sidebar-foot-copy">
             {zh
-              ? "你的任务、你的 GPU，一条可靠队列。"
-              : "Your workloads, your GPUs, one reliable queue."}
+              ? "节点主动领取任务，无需开放入站端口。"
+              : "Workers pull jobs without opening inbound ports."}
           </div>
         </div>
       </aside>
@@ -141,10 +183,29 @@ function Workspace() {
             <BrandMark />
             <BrandName />
           </div>
+          {view === "admin" && (
+            <button
+              className="topbar-button admin-back-button"
+              onClick={() => setView("workspace")}
+              aria-label={zh ? "返回工作区" : "Back to workspace"}
+            >
+              <Icon name="arrow" />
+              <span>{zh ? "返回工作区" : "Workspace"}</span>
+            </button>
+          )}
           <div className="topbar-spacer" />
           <PreferenceControls compact />
-          <AdminJobs />
-          <ApiKeys />
+          {view === "workspace" && isAdmin && (
+            <button
+              className="topbar-button"
+              onClick={() => setView("admin")}
+              aria-label={zh ? "管理" : "Admin"}
+            >
+              <Icon name="admin" />
+              <span>{zh ? "管理" : "Admin"}</span>
+            </button>
+          )}
+          {view === "workspace" && <ApiKeys />}
           <div className="account-menu">
             <span className="avatar">{email.slice(0, 1).toUpperCase()}</span>
             <span className="account-copy">
@@ -161,66 +222,72 @@ function Workspace() {
           </div>
         </header>
 
-        <main id="workspace" className="workspace">
-          <section className="page-heading">
-            <div>
-              <span className="eyebrow">
-                {zh ? "算力工作区" : "Compute workspace"}
-              </span>
-              <h1>{zh ? "欢迎回来。" : "Good to see you."}</h1>
-              <p>
-                {zh
-                  ? "在一个界面提交任务并监控 GPU 算力池。"
-                  : "Submit workloads and monitor your GPU pool from one place."}
-              </p>
-            </div>
-            <a className="docs-link" href="#submit">
-              <Icon name="spark" /> {zh ? "新建任务" : "New task"}
-            </a>
-          </section>
-
-          <ServicePanel />
-          <SubmitForm onSubmitted={refresh} />
-
-          <section id="history" className="surface history-surface">
-            <div className="section-heading">
+        {isAdmin && (
+          <div hidden={view !== "admin"}>
+            <AdminJobs />
+          </div>
+        )}
+        {view === "workspace" && (
+          <main id="workspace" className="workspace">
+            <section className="page-heading">
               <div>
-                <span className="section-kicker">
-                  {zh ? "动态" : "Activity"}
+                <span className="eyebrow">
+                  {zh ? "任务中心" : "Task center"}
                 </span>
-                <h2>{zh ? "最近任务" : "Recent tasks"}</h2>
+                <h1>
+                  {zh ? "今天想运行什么？" : "What would you like to run?"}
+                </h1>
+                <p>
+                  {zh
+                    ? "提交文本、图片、视频或语音任务，进度和结果都在这里。"
+                    : "Submit text, image, video, or speech jobs and track every result here."}
+                </p>
               </div>
-              <button
-                className="button-secondary compact"
-                onClick={() => void refresh()}
-              >
-                <Icon name="refresh" /> {zh ? "刷新" : "Refresh"}
-              </button>
-            </div>
-            {error && (
-              <div className="alert alert-error" role="alert">{error}</div>
-            )}
-            <HistoryFilters
-              zh={zh}
-              filters={filters}
-              setFilters={setFilters}
-              onExport={() => void exportJobs(filters)}
-            />
-            <JobList
-              jobs={jobs}
-              loading={loading}
-              onChanged={() => void refresh()}
-            />
-            {nextCursor && (
-              <button
-                className="button-secondary load-more"
-                onClick={() => void loadMore()}
-              >
-                {zh ? "加载更多" : "Load more"}
-              </button>
-            )}
-          </section>
-        </main>
+            </section>
+
+            <ServicePanel />
+            <SubmitForm onSubmitted={refresh} />
+
+            <section id="history" className="surface history-surface">
+              <div className="section-heading">
+                <div>
+                  <span className="section-kicker">
+                    {zh ? "任务记录" : "Job history"}
+                  </span>
+                  <h2>{zh ? "最近任务" : "Recent tasks"}</h2>
+                </div>
+                <button
+                  className="button-secondary compact"
+                  onClick={() => void refresh()}
+                >
+                  <Icon name="refresh" /> {zh ? "刷新" : "Refresh"}
+                </button>
+              </div>
+              {error && (
+                <div className="alert alert-error" role="alert">{error}</div>
+              )}
+              <HistoryFilters
+                zh={zh}
+                filters={filters}
+                setFilters={setFilters}
+                onExport={() => void exportJobs(filters)}
+              />
+              <JobList
+                jobs={jobs}
+                loading={loading}
+                onChanged={() => void refresh()}
+              />
+              {nextCursor && (
+                <button
+                  className="button-secondary load-more"
+                  onClick={() => void loadMore()}
+                >
+                  {zh ? "加载更多" : "Load more"}
+                </button>
+              )}
+            </section>
+          </main>
+        )}
       </div>
     </div>
   );
@@ -250,18 +317,20 @@ function HistoryFilters(
         onChange={(e) => patch("status", e.target.value)}
       >
         <option value="">{zh ? "全部状态" : "All statuses"}</option>
-        {["queued", "running", "succeeded", "failed", "canceled"].map((
-          value,
-        ) => <option key={value}>{value}</option>)}
+        {JOB_STATUS_OPTIONS.map(([value, labelZh, labelEn]) => (
+          <option key={value} value={value}>{zh ? labelZh : labelEn}</option>
+        ))}
       </select>
       <select
         aria-label={zh ? "任务类型" : "Task type"}
         value={filters.type || ""}
         onChange={(e) => patch("type", e.target.value)}
       >
-        <option value="">{zh ? "全部类型" : "All types"}</option>
-        {["llm", "image", "video", "tts"].map((value) => (
-          <option key={value}>{value}</option>
+        <option value="">{zh ? "全部任务" : "All tasks"}</option>
+        {(["llm", "image", "video", "tts"] as JobType[]).map((value) => (
+          <option key={value} value={value}>
+            {JOB_TYPE_LABELS[value][zh ? 0 : 1]}
+          </option>
         ))}
       </select>
       <input
@@ -344,8 +413,8 @@ function ChangePassword(
             <h2>{zh ? "设置新密码" : "Set a new password"}</h2>
             <p>
               {zh
-                ? `${email} 首次登录，需要先更换临时密码。`
-                : `${email} must replace the temporary password before continuing.`}
+                ? `首次登录 ${email}，请先设置一个新密码。`
+                : `Set a new password for ${email} before continuing.`}
             </p>
           </div>
           <form
@@ -434,43 +503,45 @@ function SignIn() {
         <div className="auth-message">
           <span className="auth-tag">
             <span className="status-pulse" />{" "}
-            {zh ? "私有 GPU 调度" : "Private GPU orchestration"}
+            {zh ? "闲置 GPU 算力池" : "Idle GPU pool"}
           </span>
           <h1>
             {zh
               ? (
                 <>
-                  你的算力。<br />一条可靠队列。
+                  让闲置 GPU<br />跑起 AI 任务。
                 </>
               )
               : (
                 <>
-                  Your compute.<br />One reliable queue.
+                  Put idle GPUs<br />back to work.
                 </>
               )}
           </h1>
           <p>
             {zh
-              ? "在你已有的 GPU 上运行 AI 任务，无需开放任何入站端口。"
-              : "Run AI workloads across the GPUs you already own, without exposing a single inbound port."}
+              ? "闲置 GPU 主动从队列领取任务，全程无需开放入站端口。"
+              : "Idle GPUs pull jobs from the queue without opening inbound ports."}
           </p>
         </div>
         <div className="auth-proof">
           <div>
             <Icon name="shield" />
             <span>
-              <strong>{zh ? "隐私优先" : "Private by design"}</strong>
+              <strong>{zh ? "无需开放端口" : "No inbound ports"}</strong>
               <small>
-                {zh ? "仅使用出站连接" : "Outbound connections only"}
+                {zh ? "GPU 节点主动领取任务" : "GPU workers pull jobs"}
               </small>
             </span>
           </div>
           <div>
             <Icon name="bolt" />
             <span>
-              <strong>{zh ? "故障可恢复" : "Built to recover"}</strong>
+              <strong>{zh ? "离线也不丢任务" : "Jobs survive downtime"}</strong>
               <small>
-                {zh ? "任务租约与自动重试" : "Leased jobs, automatic retry"}
+                {zh
+                  ? "继续排队，失败自动重试"
+                  : "Queued safely with automatic retries"}
               </small>
             </span>
           </div>
@@ -491,8 +562,8 @@ function SignIn() {
             <h2>{zh ? "欢迎回来" : "Welcome back"}</h2>
             <p>
               {zh
-                ? "登录你的 InferSpool 工作区。"
-                : "Sign in to your InferSpool workspace."}
+                ? "登录后提交任务、查看进度和获取结果。"
+                : "Sign in to submit jobs, track progress, and collect results."}
             </p>
           </div>
           <form
@@ -553,8 +624,8 @@ function SignIn() {
           </form>
           <p className="login-help">
             {zh
-              ? "仅限受邀用户访问。如需账号，请联系管理员。"
-              : "Access is invite-only. Contact your administrator if you need an account."}
+              ? "仅限管理员创建的账号登录。需要账号请联系管理员。"
+              : "Only administrator-created accounts can sign in. Contact an administrator for access."}
           </p>
         </div>
       </section>

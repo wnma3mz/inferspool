@@ -7,16 +7,16 @@ import { useQueueStats } from "../lib/useJobs";
 import type { ServiceStat } from "../lib/types";
 
 const LABELS: Record<string, string> = {
-  image: "Image",
-  video: "Video",
-  tts: "Text to Speech",
-  llm: "Text",
+  image: "Image generation",
+  video: "Video generation",
+  tts: "Text to speech",
+  llm: "Text generation",
 };
 const LABELS_ZH: Record<string, string> = {
-  image: "图片",
-  video: "视频",
+  image: "图片生成",
+  video: "视频生成",
   tts: "文本转语音",
-  llm: "文本",
+  llm: "文本生成",
 };
 
 export function ServicePanel() {
@@ -49,27 +49,29 @@ export function ServicePanel() {
         <Metric
           icon="server"
           tone="green"
-          label={zh ? "GPU 节点" : "GPU workers"}
+          label={zh ? "在线节点" : "Online workers"}
           value={stats.workers_online}
           note={stats.workers_online
-            ? (zh ? "在线并已就绪" : "Online and ready")
-            : (zh ? "等待节点上线" : "Waiting for a worker")}
+            ? (zh ? "可立即领取任务" : "Ready to take jobs")
+            : (zh ? "暂无节点在线" : "No workers online")}
         />
         <Metric
           icon="activity"
           tone="blue"
-          label={zh ? "可用服务" : "Active services"}
+          label={zh ? "可用能力" : "Available capabilities"}
           value={healthyServices}
-          note={zh ? `已配置 ${types.length} 个` : `${types.length} configured`}
+          note={zh
+            ? `共 ${types.length} 种任务类型`
+            : `${types.length} job types configured`}
         />
         <Metric
           icon="queue"
           tone="amber"
-          label={zh ? "排队中" : "In queue"}
+          label={zh ? "等待任务" : "Waiting jobs"}
           value={stats.queued}
           note={stats.queued
-            ? (zh ? "等待执行" : "Waiting to run")
-            : (zh ? "队列为空" : "Queue is clear")}
+            ? (zh ? "等待节点领取" : "Waiting for a worker")
+            : (zh ? "当前没有排队任务" : "Nothing in the queue")}
         />
         <Metric
           icon="bolt"
@@ -77,8 +79,8 @@ export function ServicePanel() {
           label={zh ? "运行中" : "Running now"}
           value={stats.running}
           note={stats.running
-            ? (zh ? "正在处理任务" : "Processing workloads")
-            : (zh ? "暂无运行任务" : "No active tasks")}
+            ? (zh ? "GPU 正在执行" : "Running on GPUs")
+            : (zh ? "当前没有运行任务" : "No jobs are running")}
         />
       </div>
 
@@ -92,15 +94,15 @@ export function ServicePanel() {
             />
             <strong>
               {stats.workers_online
-                ? (zh ? "算力池运行正常" : "Compute pool operational")
-                : (zh ? "算力池离线" : "Compute pool offline")}
+                ? (zh ? "算力池可用" : "GPU pool available")
+                : (zh ? "暂无可用算力" : "No compute available")}
             </strong>
             <span>
               {stats.workers_online
-                ? (zh ? "节点正在接收任务" : "Workers are accepting tasks")
+                ? (zh ? "在线节点可以领取任务" : "Online workers can take jobs")
                 : (zh
-                  ? "任务将安全保留在队列中"
-                  : "Tasks remain safely queued")}
+                  ? "已提交的任务会继续排队"
+                  : "Submitted jobs will remain queued")}
             </span>
           </div>
           {stats.workers.some((worker) => worker.id) && (
@@ -110,7 +112,7 @@ export function ServicePanel() {
             >
               {expanded
                 ? (zh ? "收起详情" : "Hide details")
-                : (zh ? "查看节点" : "View workers")}
+                : (zh ? "节点详情" : "Worker details")}
               <Icon name="chevron" className={expanded ? "rotated" : ""} />
             </button>
           )}
@@ -134,10 +136,10 @@ export function ServicePanel() {
             <Icon name="queue" /> {zh
               ? `${
                 stalled.map((type) => LABELS_ZH[type] ?? type).join("、")
-              }任务将等待对应后端恢复。`
+              }任务正在等待支持对应能力的节点上线。`
               : `${
                 stalled.map((type) => LABELS[type] ?? type).join(", ")
-              } tasks are queued until a matching backend returns.`}
+              } jobs are waiting for a compatible worker.`}
           </div>
         )}
 
@@ -167,7 +169,11 @@ export function ServicePanel() {
                 </div>
                 <div className="worker-services">
                   {(worker.services ?? []).length === 0
-                    ? <span>{zh ? "未上报服务" : "No services reported"}</span>
+                    ? (
+                      <span>
+                        {zh ? "尚未上报能力" : "No capabilities reported"}
+                      </span>
+                    )
                     : (worker.services ?? []).map((service) => (
                       <span key={service.type}>
                         {service.name || LABELS[service.type] || service.type}

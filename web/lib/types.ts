@@ -7,6 +7,13 @@ export type JobStatus =
 
 export type JobType = "image" | "video" | "tts" | "llm";
 
+export const JOB_TYPE_LABELS: Record<JobType, [string, string]> = {
+  llm: ["文本生成", "Text generation"],
+  image: ["图片生成", "Image generation"],
+  video: ["视频生成", "Video generation"],
+  tts: ["文本转语音", "Text to speech"],
+};
+
 export interface Job {
   id: string;
   user_id: string;

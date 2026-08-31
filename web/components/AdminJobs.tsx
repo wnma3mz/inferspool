@@ -1,9 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { api, jsonBody } from "../lib/api";
-import type { Job, JobStatus } from "../lib/types";
+import {
+  type Job,
+  JOB_TYPE_LABELS,
+  type JobStatus,
+  type JobType,
+} from "../lib/types";
 import { Icon } from "./Icons";
 import { usePreferences } from "./Preferences";
 
@@ -57,95 +61,115 @@ const labels: Record<Tab, [string, string]> = {
   users: ["用户", "Users"],
   workers: ["GPU 节点", "GPU workers"],
 };
+const adminStatusLabels: Record<string, [string, string]> = {
+  queued: ["排队中", "Queued"],
+  running: ["运行中", "Running"],
+  succeeded: ["已完成", "Completed"],
+  failed: ["失败", "Failed"],
+  canceled: ["已取消", "Canceled"],
+  active: ["正常", "Active"],
+  invited: ["待首次登录", "Awaiting first sign-in"],
+  disabled: ["已禁用", "Disabled"],
+};
 
 export function AdminJobs() {
   const { language } = usePreferences();
   const zh = language === "zh";
-  const [allowed, setAllowed] = useState(false);
-  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("overview");
-  useEffect(() => {
-    void api<{ admin: boolean }>("/me").then((value) => setAllowed(value.admin))
-      .catch(() => setAllowed(false));
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [workers, setWorkers] = useState<AdminWorker[]>([]);
+  const [usersError, setUsersError] = useState("");
+  const [workersError, setWorkersError] = useState("");
+  const refreshUsers = useCallback(async () => {
+    try {
+      setUsers((await api<{ data: AdminUser[] }>("/admin/users")).data);
+      setUsersError("");
+    } catch (caught) {
+      setUsersError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, []);
+  const refreshWorkers = useCallback(async () => {
+    try {
+      setWorkers(await api<AdminWorker[]>("/admin/workers"));
+      setWorkersError("");
+    } catch (caught) {
+      setWorkersError(
+        caught instanceof Error ? caught.message : String(caught),
+      );
+    }
   }, []);
   useEffect(() => {
-    if (!open) return;
-    const close = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [open]);
-  if (!allowed) return null;
+    void Promise.all([refreshUsers(), refreshWorkers()]);
+  }, [refreshUsers, refreshWorkers]);
   return (
-    <>
-      <button className="topbar-button" onClick={() => setOpen(true)}>
-        <Icon name="admin" />
-        <span>{zh ? "管理" : "Admin"}</span>
-      </button>
-      {open && typeof document !== "undefined" &&
-        createPortal(
-          <div
-            className="modal-backdrop"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) setOpen(false);
-            }}
+    <main className="workspace admin-workspace" aria-labelledby="admin-title">
+      <section className="page-heading admin-page-heading">
+        <div>
+          <span className="eyebrow">{zh ? "管理中心" : "Administration"}</span>
+          <h1 id="admin-title">
+            {zh ? "InferSpool 管理台" : "InferSpool administration"}
+          </h1>
+          <p>
+            {zh
+              ? "查看所有任务，管理用户账号和 GPU 节点。"
+              : "Review every job and manage user accounts and GPU workers."}
+          </p>
+        </div>
+        <span className="admin-page-badge">
+          <Icon name="shield" /> {zh ? "管理员权限" : "Administrator"}
+        </span>
+      </section>
+      <nav
+        className="admin-tabs admin-page-tabs"
+        aria-label={zh ? "管理导航" : "Admin navigation"}
+      >
+        {(Object.keys(labels) as Tab[]).map((value) => (
+          <button
+            key={value}
+            className={tab === value ? "active" : ""}
+            aria-current={tab === value ? "page" : undefined}
+            onClick={() => setTab(value)}
           >
-            <section
-              className="modal admin-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="admin-title"
-            >
-              <div className="modal-header">
-                <div className="modal-title">
-                  <span className="modal-icon admin">
-                    <Icon name="admin" />
-                  </span>
-                  <div>
-                    <h2 id="admin-title">
-                      {zh ? "InferSpool 管理台" : "InferSpool administration"}
-                    </h2>
-                    <p>
-                      {zh
-                        ? "用户、任务、共享 GPU 与运行状态。"
-                        : "Users, jobs, shared GPUs and operations."}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  className="icon-button"
-                  onClick={() => setOpen(false)}
-                  aria-label={zh ? "关闭" : "Close"}
-                >
-                  <Icon name="close" />
-                </button>
-              </div>
-              <nav className="admin-tabs">
-                {(Object.keys(labels) as Tab[]).map((value) => (
-                  <button
-                    key={value}
-                    className={tab === value ? "active" : ""}
-                    onClick={() => setTab(value)}
-                  >
-                    {labels[value][zh ? 0 : 1]}
-                  </button>
-                ))}
-              </nav>
-              <div className="admin-content">
-                {tab === "overview"
-                  ? <Overview zh={zh} />
-                  : tab === "jobs"
-                  ? <Jobs zh={zh} />
-                  : tab === "users"
-                  ? <Users zh={zh} />
-                  : <Workers zh={zh} />}
-              </div>
-            </section>
-          </div>,
-          document.body,
-        )}
-    </>
+            <Icon
+              name={value === "overview"
+                ? "grid"
+                : value === "jobs"
+                ? "history"
+                : value === "users"
+                ? "admin"
+                : "server"}
+            />
+            {labels[value][zh ? 0 : 1]}
+          </button>
+        ))}
+      </nav>
+      <section className="surface admin-page-surface">
+        <div className="admin-content">
+          <div hidden={tab !== "overview"}>
+            <Overview zh={zh} />
+          </div>
+          <div hidden={tab !== "jobs"}>
+            <Jobs zh={zh} users={users} workers={workers} />
+          </div>
+          <div hidden={tab !== "users"}>
+            <Users
+              zh={zh}
+              users={users}
+              loadError={usersError}
+              refresh={refreshUsers}
+            />
+          </div>
+          <div hidden={tab !== "workers"}>
+            <Workers
+              zh={zh}
+              workers={workers}
+              loadError={workersError}
+              refresh={refreshWorkers}
+            />
+          </div>
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -197,7 +221,9 @@ function Overview({ zh }: { zh: boolean }) {
             {Object.entries(metrics.by_type || {}).map(([type, value]) => (
               <tr key={type}>
                 <td>
-                  <strong>{type}</strong>
+                  <strong>
+                    {JOB_TYPE_LABELS[type as JobType]?.[zh ? 0 : 1] ?? type}
+                  </strong>
                 </td>
                 <td>{value.total}</td>
                 <td>
@@ -214,33 +240,51 @@ function Overview({ zh }: { zh: boolean }) {
   );
 }
 
-function Jobs({ zh }: { zh: boolean }) {
+function Jobs(
+  { zh, users, workers }: {
+    zh: boolean;
+    users: AdminUser[];
+    workers: AdminWorker[];
+  },
+) {
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [users, setUsers] = useState<AdminUser[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [type, setType] = useState("");
   const [userId, setUserId] = useState("");
+  const [workerId, setWorkerId] = useState("");
   const [search, setSearch] = useState("");
   const [tag, setTag] = useState("");
   const [after, setAfter] = useState("");
   const [before, setBefore] = useState("");
   const [error, setError] = useState("");
   const [acting, setActing] = useState("");
+  const deferredSearch = useDeferredValue(search);
+  const deferredTag = useDeferredValue(tag);
   const queryString = useCallback((cursor?: string | null) => {
-    const query = new URLSearchParams({ limit: "100" });
+    const query = new URLSearchParams({ limit: "50" });
     if (status) query.set("status", status);
     if (type) query.set("type", type);
     if (userId) query.set("user_id", userId);
-    if (search) query.set("search", search);
-    if (tag) query.set("tag", tag);
+    if (workerId) query.set("worker_id", workerId);
+    if (deferredSearch) query.set("search", deferredSearch);
+    if (deferredTag) query.set("tag", deferredTag);
     if (after) query.set("after", new Date(`${after}T00:00:00`).toISOString());
     if (before) {
       query.set("before", new Date(`${before}T23:59:59.999`).toISOString());
     }
     if (cursor) query.set("cursor", cursor);
     return query;
-  }, [status, type, userId, search, tag, after, before]);
+  }, [
+    status,
+    type,
+    userId,
+    workerId,
+    deferredSearch,
+    deferredTag,
+    after,
+    before,
+  ]);
   const refresh = useCallback(async () => {
     try {
       const page = await api<{ data: Job[]; next_cursor: string | null }>(
@@ -256,11 +300,6 @@ function Jobs({ zh }: { zh: boolean }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  useEffect(() => {
-    void api<{ data: AdminUser[] }>("/admin/users").then((value) =>
-      setUsers(value.data)
-    ).catch(() => undefined);
-  }, []);
   const loadMore = async () => {
     if (!nextCursor) return;
     try {
@@ -293,20 +332,26 @@ function Jobs({ zh }: { zh: boolean }) {
     <>
       <div className="admin-toolbar admin-job-filters">
         <div className="filter-field">
-          <label>{zh ? "状态" : "Status"}</label>
+          <label>{zh ? "任务状态" : "Job status"}</label>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">{zh ? "全部" : "All"}</option>
+            <option value="">{zh ? "全部状态" : "All statuses"}</option>
             {["queued", "running", "succeeded", "failed", "canceled"].map((
               v,
-            ) => <option key={v}>{v}</option>)}
+            ) => (
+              <option key={v} value={v}>
+                {adminStatusLabels[v][zh ? 0 : 1]}
+              </option>
+            ))}
           </select>
         </div>
         <div className="filter-field">
           <label>{zh ? "类型" : "Type"}</label>
           <select value={type} onChange={(e) => setType(e.target.value)}>
-            <option value="">{zh ? "全部" : "All"}</option>
-            {["llm", "image", "video", "tts"].map((v) => (
-              <option key={v}>{v}</option>
+            <option value="">{zh ? "全部任务" : "All tasks"}</option>
+            {(["llm", "image", "video", "tts"] as JobType[]).map((v) => (
+              <option key={v} value={v}>
+                {JOB_TYPE_LABELS[v][zh ? 0 : 1]}
+              </option>
             ))}
           </select>
         </div>
@@ -324,11 +369,26 @@ function Jobs({ zh }: { zh: boolean }) {
           </select>
         </div>
         <div className="filter-field">
+          <label>{zh ? "GPU 节点" : "GPU worker"}</label>
+          <select
+            aria-label={zh ? "筛选 GPU 节点" : "Filter GPU worker"}
+            value={workerId}
+            onChange={(e) => setWorkerId(e.target.value)}
+          >
+            <option value="">{zh ? "全部节点" : "All workers"}</option>
+            {workers.map((worker) => (
+              <option key={worker.id} value={worker.id}>
+                {worker.name || worker.id}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-field">
           <label>{zh ? "搜索" : "Search"}</label>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={zh ? "提示词" : "Prompt"}
+            placeholder={zh ? "搜索任务内容" : "Search job input"}
           />
         </div>
         <div className="filter-field">
@@ -391,7 +451,10 @@ function Jobs({ zh }: { zh: boolean }) {
                   <strong>
                     {String(job.payload.prompt || job.payload.text || job.type)}
                   </strong>
-                  <small>{job.type} · {job.id.slice(0, 8)}</small>
+                  <small>
+                    {JOB_TYPE_LABELS[job.type as JobType]?.[zh ? 0 : 1] ??
+                      job.type} · {job.id.slice(0, 8)}
+                  </small>
                 </td>
                 <td>
                   <code>
@@ -405,7 +468,7 @@ function Jobs({ zh }: { zh: boolean }) {
                 <td>
                   <span className={`status-pill ${job.status}`}>
                     <i />
-                    {job.status}
+                    {adminStatusLabels[job.status]?.[zh ? 0 : 1] ?? job.status}
                   </span>
                 </td>
                 <td>{job.worker_id || "—"}</td>
@@ -439,22 +502,17 @@ function Jobs({ zh }: { zh: boolean }) {
   );
 }
 
-function Users({ zh }: { zh: boolean }) {
-  const [users, setUsers] = useState<AdminUser[]>([]);
+function Users(
+  { zh, users, loadError, refresh }: {
+    zh: boolean;
+    users: AdminUser[];
+    loadError: string;
+    refresh: () => Promise<void>;
+  },
+) {
   const [email, setEmail] = useState("");
   const [error, setError] = useState("");
   const [credential, setCredential] = useState("");
-  const refresh = async () => {
-    try {
-      setUsers((await api<{ data: AdminUser[] }>("/admin/users")).data);
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-  useEffect(() => {
-    void refresh();
-  }, []);
   const invite = async () => {
     try {
       const value = await api<{ email: string; temporary_password: string }>(
@@ -495,22 +553,22 @@ function Users({ zh }: { zh: boolean }) {
   const editQuota = async (user: AdminUser) => {
     const current = user.profile;
     const active = window.prompt(
-      zh ? "最大排队/运行任务数" : "Maximum active jobs",
+      zh ? "同时排队或运行的任务上限" : "Maximum queued or running jobs",
       String(current?.max_active_jobs ?? 100),
     );
     if (active == null) return;
     const daily = window.prompt(
-      zh ? "每日任务额度" : "Daily job limit",
+      zh ? "每天最多提交多少个任务" : "Maximum jobs per day",
       String(current?.daily_job_limit ?? 500),
     );
     if (daily == null) return;
     const priority = window.prompt(
-      zh ? "普通用户最高优先级（0-10）" : "Maximum priority (0-10)",
+      zh ? "允许使用的最高优先级（0-10）" : "Maximum allowed priority (0-10)",
       String(current?.max_priority ?? 5),
     );
     if (priority == null) return;
     const retention = window.prompt(
-      zh ? "默认保留天数" : "Default retention days",
+      zh ? "结果默认保留天数" : "Default result retention in days",
       String(current?.retention_days ?? 30),
     );
     if (retention == null) return;
@@ -538,7 +596,7 @@ function Users({ zh }: { zh: boolean }) {
     <>
       <div className="admin-create">
         <div>
-          <label>{zh ? "邀请用户" : "Invite user"}</label>
+          <label>{zh ? "新用户邮箱" : "New user email"}</label>
           <input
             type="email"
             value={email}
@@ -561,15 +619,21 @@ function Users({ zh }: { zh: boolean }) {
           onClose={() => setCredential("")}
         />
       )}
-      {error && <div className="alert alert-error admin-alert">{error}</div>}
+      {(error || loadError) && (
+        <div className="alert alert-error admin-alert">
+          {error || loadError}
+        </div>
+      )}
       <div className="admin-table-wrap">
         <table className="admin-table users-table">
           <thead>
             <tr>
               <th>{zh ? "账号" : "Account"}</th>
               <th>{zh ? "状态" : "Status"}</th>
-              <th>{zh ? "活跃/日额度" : "Active / daily"}</th>
-              <th>{zh ? "优先级/保留" : "Priority / retention"}</th>
+              <th>{zh ? "同时任务 / 每日额度" : "Concurrent / daily limit"}</th>
+              <th>
+                {zh ? "最高优先级 / 保留天数" : "Max priority / retention"}
+              </th>
               <th>{zh ? "最近登录" : "Last sign-in"}</th>
               <th />
             </tr>
@@ -582,9 +646,11 @@ function Users({ zh }: { zh: boolean }) {
                   <small>{user.id.slice(0, 8)}</small>
                 </td>
                 <td>
-                  {user.profile?.status || "active"}
+                  {adminStatusLabels[user.profile?.status || "active"]?.[
+                    zh ? 0 : 1
+                  ] || user.profile?.status || "active"}
                   {user.profile?.force_password_change
-                    ? ` · ${zh ? "待改密" : "password pending"}`
+                    ? ` · ${zh ? "待设置新密码" : "new password required"}`
                     : ""}
                 </td>
                 <td>
@@ -645,23 +711,18 @@ function Users({ zh }: { zh: boolean }) {
   );
 }
 
-function Workers({ zh }: { zh: boolean }) {
-  const [workers, setWorkers] = useState<AdminWorker[]>([]);
+function Workers(
+  { zh, workers, loadError, refresh }: {
+    zh: boolean;
+    workers: AdminWorker[];
+    loadError: string;
+    refresh: () => Promise<void>;
+  },
+) {
   const [id, setId] = useState("");
   const [types, setTypes] = useState("llm");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
-  const refresh = async () => {
-    try {
-      setWorkers(await api<AdminWorker[]>("/admin/workers"));
-      setError("");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  };
-  useEffect(() => {
-    void refresh();
-  }, []);
   const create = async () => {
     try {
       const value = await api<{ env: string }>("/admin/workers", {
@@ -717,7 +778,9 @@ function Workers({ zh }: { zh: boolean }) {
           />
         </div>
         <div>
-          <label>{zh ? "能力（逗号分隔）" : "Capabilities"}</label>
+          <label>
+            {zh ? "支持的任务类型（逗号分隔）" : "Job types (comma-separated)"}
+          </label>
           <input
             value={types}
             onChange={(e) => setTypes(e.target.value)}
@@ -739,7 +802,11 @@ function Workers({ zh }: { zh: boolean }) {
           onClose={() => setSecret("")}
         />
       )}
-      {error && <div className="alert alert-error admin-alert">{error}</div>}
+      {(error || loadError) && (
+        <div className="alert alert-error admin-alert">
+          {error || loadError}
+        </div>
+      )}
       <div className="admin-table-wrap">
         <table className="admin-table workers-table">
           <thead>
@@ -759,10 +826,18 @@ function Workers({ zh }: { zh: boolean }) {
                   <strong>{worker.name || worker.id}</strong>
                   <small>{worker.id}</small>
                 </td>
-                <td>{worker.capabilities.join(", ")}</td>
+                <td>
+                  {worker.capabilities.map((type) =>
+                    JOB_TYPE_LABELS[type as JobType]?.[zh ? 0 : 1] ?? type
+                  ).join("、")}
+                </td>
                 <td>
                   {(worker.services || []).map((service) =>
-                    `${service.type}:${service.healthy ? "up" : "down"}`
+                    `${service.type}：${
+                      service.healthy
+                        ? (zh ? "可用" : "Available")
+                        : (zh ? "不可用" : "Unavailable")
+                    }`
                   ).join(" · ") || "—"}
                 </td>
                 <td>
@@ -775,14 +850,14 @@ function Workers({ zh }: { zh: boolean }) {
                 <td>
                   {worker.disabled_at
                     ? (zh ? "已禁用" : "Disabled")
-                    : (zh ? "启用" : "Enabled")}
+                    : (zh ? "正常" : "Active")}
                 </td>
                 <td className="admin-actions">
                   <button
                     className="table-action"
                     onClick={() => void action(worker, "rotate-token")}
                   >
-                    {zh ? "换令牌" : "Rotate"}
+                    {zh ? "更换令牌" : "Rotate token"}
                   </button>
                   <button
                     className="table-action danger"
@@ -821,12 +896,12 @@ function SecretBox(
         <Icon name="shield" />
         <span>
           <strong>
-            {zh ? "仅显示一次，请立即保存" : "Shown once—save it now"}
+            {zh ? "请立即复制并保存" : "Copy and save this now"}
           </strong>
           <small>
             {zh
-              ? "密码或令牌不会再次显示。"
-              : "The password or token cannot be shown again."}
+              ? "关闭后无法再次查看这个密码或令牌。"
+              : "You cannot view this password or token again after closing."}
           </small>
         </span>
         <button className="icon-button" onClick={onClose}>

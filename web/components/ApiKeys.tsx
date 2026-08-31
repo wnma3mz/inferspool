@@ -92,7 +92,7 @@ export function ApiKeys() {
     <>
       <button className="topbar-button" onClick={() => setOpen(true)}>
         <Icon name="key" />
-        <span>{zh ? "CLI 访问" : "CLI access"}</span>
+        <span>{zh ? "CLI 密钥" : "CLI keys"}</span>
       </button>
       {open && typeof document !== "undefined" &&
         createPortal(
@@ -115,11 +115,11 @@ export function ApiKeys() {
                     <Icon name="key" />
                   </span>
                   <div>
-                    <h2 id="keys-title">{zh ? "CLI 访问" : "CLI access"}</h2>
+                    <h2 id="keys-title">{zh ? "CLI 密钥" : "CLI keys"}</h2>
                     <p>
                       {zh
-                        ? "管理 InferSpool CLI 使用的访问密钥。"
-                        : "Manage keys used by the InferSpool CLI."}
+                        ? "创建或撤销用于 CLI 登录的密钥。"
+                        : "Create or revoke keys used to sign in from the CLI."}
                     </p>
                   </div>
                 </div>
@@ -138,12 +138,14 @@ export function ApiKeys() {
                       <Icon name="shield" />
                       <span>
                         <strong>
-                          {zh ? "请立即保存此密钥" : "Save this key now"}
+                          {zh
+                            ? "现在复制并保存密钥"
+                            : "Copy and save this key now"}
                         </strong>
                         <small>
                           {zh
-                            ? "出于安全考虑，之后不会再次显示。"
-                            : "For security, it won’t be shown again."}
+                            ? "关闭窗口后无法再次查看。"
+                            : "You cannot view it again after closing this window."}
                         </small>
                       </span>
                     </div>
@@ -161,7 +163,7 @@ export function ApiKeys() {
 
                 <div className="key-create">
                   <label htmlFor="key-label">
-                    {zh ? "创建新密钥" : "Create a new key"}
+                    {zh ? "密钥名称" : "Key name"}
                   </label>
                   <div>
                     <input
@@ -198,9 +200,7 @@ export function ApiKeys() {
                 {keys.length === 0
                   ? (
                     <div className="modal-empty">
-                      {zh
-                        ? "尚未创建 CLI 密钥。"
-                        : "No CLI keys have been created."}
+                      {zh ? "还没有 CLI 密钥。" : "No CLI keys yet."}
                     </div>
                   )
                   : (

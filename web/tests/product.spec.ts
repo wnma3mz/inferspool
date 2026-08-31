@@ -139,6 +139,7 @@ async function mockBackend(page: Page, forcePassword = false) {
     "failed",
     "retry target",
   );
+  failed.worker_id = "home-4090";
   const finished = job(
     "dddddddd-dddd-dddd-dddd-dddddddddddd",
     "succeeded",
@@ -165,6 +166,7 @@ async function mockBackend(page: Page, forcePassword = false) {
     workerCreated: false,
     workerRevoked: false,
     userDeleted: false,
+    adminJobWorkerFilter: null as string | null,
   };
   const invited = {
     id: "22222222-2222-2222-2222-222222222222",
@@ -343,7 +345,14 @@ async function mockBackend(page: Page, forcePassword = false) {
         },
       });
     }
-    if (path === "/admin/jobs") return fulfill({ data: [failed] });
+    if (path === "/admin/jobs") {
+      state.adminJobWorkerFilter = url.searchParams.get("worker_id");
+      const data = state.adminJobWorkerFilter &&
+          failed.worker_id !== state.adminJobWorkerFilter
+        ? []
+        : [failed];
+      return fulfill({ data, next_cursor: null });
+    }
     if (/\/admin\/jobs\/.+\/retry$/.test(path)) {
       return fulfill(
         job("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", "queued", "retry target"),
@@ -374,7 +383,7 @@ async function mockBackend(page: Page, forcePassword = false) {
       /\/admin\/users\/[0-9a-f-]+$/.test(path) && request.method() === "PATCH"
     ) return fulfill(invited.profile);
     if (path === "/admin/workers" && request.method() === "GET") {
-      return fulfill(state.workerCreated ? [worker] : []);
+      return fulfill([worker]);
     }
     if (path === "/admin/workers" && request.method() === "POST") {
       state.workerCreated = true;
@@ -409,7 +418,8 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
   await installRealtimeMock(page);
   const state = await mockBackend(page);
   await signIn(page);
-  await expect(page.getByRole("heading", { name: "欢迎回来。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "今天想运行什么？" }))
+    .toBeVisible();
   await expect(page.getByText("generated answer")).toBeVisible();
   await expect(
     page.locator('img[src="http://storage.test/result.png"]').first(),
@@ -421,7 +431,7 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
     mimeType: "image/png",
     buffer: Buffer.from("image fixture"),
   });
-  await page.getByLabel("任务提示词").fill("browser multimodal test");
+  await page.getByLabel("任务内容").fill("browser multimodal test");
   await page.getByRole("button", { name: "提交任务" }).click();
   await expect(page.locator("#history").getByText("browser multimodal test"))
     .toBeVisible();
@@ -449,8 +459,8 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
   const resultRow = page.locator(".task-row").filter({
     hasText: "result target",
   });
-  await resultRow.getByRole("button", { name: "保留" }).click();
-  await expect(resultRow.getByRole("button", { name: "取消保留" }))
+  await resultRow.getByRole("button", { name: "长期保留" }).click();
+  await expect(resultRow.getByRole("button", { name: "取消长期保留" }))
     .toBeVisible();
   await resultRow.getByRole("button", { name: "删除" }).click();
   await expect(page.locator(".task-row").filter({ hasText: "result target" }))
@@ -475,7 +485,8 @@ test("invited account changes password before entering workspace", async ({ page
   await page.getByLabel("新密码").fill("new-password");
   await page.getByLabel("确认密码").fill("new-password");
   await page.getByRole("button", { name: "保存并继续" }).click();
-  await expect(page.getByRole("heading", { name: "欢迎回来。" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "今天想运行什么？" }))
+    .toBeVisible();
   expect(state.passwordChanged).toBeTruthy();
 });
 
@@ -483,28 +494,55 @@ test("API keys and administrator product controls", async ({ page }) => {
   await installRealtimeMock(page);
   const state = await mockBackend(page);
   await signIn(page);
-  await page.getByRole("button", { name: "CLI 访问" }).click();
-  await page.getByLabel("创建新密钥").fill("browser test");
+  await page.getByRole("button", { name: "CLI 密钥" }).click();
+  await page.getByLabel("密钥名称").fill("browser test");
   await page.getByRole("button", { name: "创建密钥" }).click();
   await expect(page.getByText("inferspool_test_once")).toBeVisible();
   await page.getByRole("button", { name: "关闭" }).click();
 
   await page.getByRole("button", { name: "管理" }).click();
-  const admin = page.getByRole("dialog", { name: "InferSpool 管理台" });
+  const admin = page.getByRole("main", { name: "InferSpool 管理台" });
+  await expect(page.getByRole("dialog", { name: "InferSpool 管理台" }))
+    .toHaveCount(0);
+  await expect(admin.getByRole("heading", { name: "InferSpool 管理台" }))
+    .toBeVisible();
+  await expect(page.getByRole("button", { name: "返回工作区" })).toBeVisible();
   await expect(admin.getByText("过去 24 小时")).toBeVisible();
   await admin.getByRole("button", { name: "任务", exact: true }).click();
+  const workerFilter = admin.getByLabel("筛选 GPU 节点");
+  await expect(workerFilter).toContainText("home-4090");
+  await workerFilter.selectOption("home-4090");
+  await expect.poll(() => state.adminJobWorkerFilter).toBe("home-4090");
   await admin.getByRole("button", { name: "重试" }).click();
 
   await admin.getByRole("button", { name: "用户", exact: true }).click();
   await admin.getByPlaceholder("user@example.com").fill("invite@example.com");
   await admin.getByRole("button", { name: "创建账号" }).click();
   await expect(admin.getByText("temporary-secret")).toBeVisible();
+  const userActions = admin.locator(".users-table tbody tr").first()
+    .locator(".admin-actions button");
+  await expect(userActions).toHaveCount(4);
+  await expect.poll(async () => {
+    const tops = await userActions.evaluateAll((buttons) =>
+      buttons.map((button) => Math.round(button.getBoundingClientRect().top))
+    );
+    return new Set(tops).size;
+  }).toBe(1);
   await admin.locator(".admin-secret").getByRole("button").first().click();
   page.once("dialog", (dialog) => dialog.accept());
   await admin.getByRole("button", { name: "删除", exact: true }).click();
   expect(state.userDeleted).toBeTruthy();
 
   await admin.getByRole("button", { name: "GPU 节点", exact: true }).click();
+  const workerActions = admin.locator(".workers-table tbody tr").first()
+    .locator(".admin-actions button");
+  await expect(workerActions).toHaveCount(3);
+  await expect.poll(async () => {
+    const tops = await workerActions.evaluateAll((buttons) =>
+      buttons.map((button) => Math.round(button.getBoundingClientRect().top))
+    );
+    return new Set(tops).size;
+  }).toBe(1);
   await admin.getByPlaceholder("home-4090").fill("home-4090");
   await admin.getByRole("button", { name: "创建节点" }).click();
   await expect(admin.getByText("worker-secret")).toBeVisible();
@@ -513,4 +551,43 @@ test("API keys and administrator product controls", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await admin.getByRole("button", { name: "撤销", exact: true }).click();
   expect(state.workerRevoked).toBeTruthy();
+  await page.getByRole("button", { name: "返回工作区" }).click();
+  await expect(page.getByRole("heading", { name: "今天想运行什么？" }))
+    .toBeVisible();
+});
+
+test("administrator workspace adapts to mobile navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installRealtimeMock(page);
+  await mockBackend(page);
+  await signIn(page);
+  await page.getByRole("button", { name: "管理" }).click();
+
+  const admin = page.getByRole("main", { name: "InferSpool 管理台" });
+  await expect(admin).toBeVisible();
+  await expect(page.getByRole("button", { name: "返回工作区" })).toBeVisible();
+  await expect(admin.getByRole("button", { name: "GPU 节点" })).toBeVisible();
+  await expect.poll(() =>
+    page.evaluate(() =>
+      document.documentElement.scrollWidth <= window.innerWidth
+    )
+  ).toBeTruthy();
+});
+
+test("language and theme use separate controls", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "切换为英文" }).first())
+    .toBeVisible();
+  const theme = page.getByRole("button", { name: /显示主题/ }).first();
+  await expect(theme)
+    .toBeVisible();
+  await theme.click();
+  await expect.poll(() => page.locator("html").getAttribute("data-theme"))
+    .toBe("light");
+  await theme.click();
+  await expect.poll(() => page.locator("html").getAttribute("data-theme"))
+    .toBe("dark");
+  await page.getByRole("button", { name: "切换为英文" }).first().click();
+  await expect(page.getByRole("heading", { name: "Welcome back" }))
+    .toBeVisible();
 });
