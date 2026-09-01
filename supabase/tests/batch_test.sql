@@ -15,6 +15,8 @@ insert into auth.users (id) values (:'alice'), (:'bob');
 insert into workers (id, capabilities, token_hash) values
   ('gpu-a', '{llm}',       extensions.crypt('tok-a', extensions.gen_salt('bf'))),
   ('gpu-b', '{llm}',       extensions.crypt('tok-b', extensions.gen_salt('bf')));
+select report_services('gpu-a', 'tok-a', '[{"type":"llm","healthy":true}]');
+select report_services('gpu-b', 'tok-b', '[{"type":"llm","healthy":true}]');
 
 -- 1. API key issuance and verification ------------------------------------
 do $$
@@ -134,7 +136,7 @@ begin
                  'alice can cancel her own job');
 end $$;
 
--- 5. pending_by_type respects capabilities ----------------------------------
+-- 5. pending_by_type respects reported services ----------------------------
 do $$
 declare v_key text;
 begin

@@ -22,12 +22,18 @@ type fakeQueue struct {
 		retryable bool
 		message   string
 	}
+	reports int
 }
 
 func (f *fakeQueue) PendingByType(context.Context) (map[string]int, error) {
 	return map[string]int{}, nil
 }
-func (f *fakeQueue) ReportServices(context.Context, []ServiceHealth) error  { return nil }
+func (f *fakeQueue) ReportServices(context.Context, []ServiceHealth) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reports++
+	return nil
+}
 func (f *fakeQueue) Claim(context.Context, string, int, int) ([]Job, error) { return nil, nil }
 func (f *fakeQueue) Heartbeat(_ context.Context, ids []string, _ int) (map[string]bool, map[string]bool, error) {
 	f.mu.Lock()
@@ -69,6 +75,24 @@ func cloneBoolMap(input map[string]bool) map[string]bool {
 		out[key] = value
 	}
 	return out
+}
+
+func TestReportNowPublishesServiceStateImmediately(t *testing.T) {
+	queue := &fakeQueue{}
+	runner := &Runner{client: queue}
+	before := time.Now()
+	if err := runner.reportNow(context.Background(), []ServiceHealth{{Type: "tts", Healthy: true}}); err != nil {
+		t.Fatal(err)
+	}
+	queue.mu.Lock()
+	reports := queue.reports
+	queue.mu.Unlock()
+	if reports != 1 {
+		t.Fatalf("reports=%d, want 1", reports)
+	}
+	if runner.lastReport.Before(before) {
+		t.Fatal("successful immediate report did not advance lastReport")
+	}
 }
 
 func TestBatchContextRenewsWholeBatchAndDistributesState(t *testing.T) {

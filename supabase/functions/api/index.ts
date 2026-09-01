@@ -223,6 +223,20 @@ function validateProductPayload(
   payload: Record<string, any>,
   userId: string,
 ) {
+  if (
+    payload._result_delivery !== undefined &&
+    !["cloud", "direct"].includes(String(payload._result_delivery))
+  ) {
+    throw Object.assign(
+      new Error("_result_delivery must be cloud or direct"),
+      { status: 400 },
+    );
+  }
+  if (type === "llm" && payload._result_delivery === "direct") {
+    throw Object.assign(new Error("LLM results are stored inline"), {
+      status: 400,
+    });
+  }
   const field = type === "tts" ? "text" : "prompt";
   if (typeof payload[field] !== "string" || !payload[field].trim()) {
     throw Object.assign(new Error(`${field} is required`), { status: 400 });
@@ -278,6 +292,22 @@ async function validateWorkerParameters(
   type: string,
   payload: Record<string, any>,
 ) {
+  if (payload._result_delivery === "direct") {
+    const { data: directRows, error: directError } = await service.from(
+      "worker_services",
+    ).select("parameter_schema,workers!inner(disabled_at)").eq("type", type)
+      .is("workers.disabled_at", null);
+    if (directError) throw directError;
+    const supported = directRows?.some((row: any) =>
+      row.parameter_schema?._result_delivery?.enum?.includes("direct")
+    );
+    if (!supported) {
+      throw Object.assign(
+        new Error("no registered worker supports direct result delivery"),
+        { status: 422, code: "direct_delivery_unavailable" },
+      );
+    }
+  }
   const supplied = (stableParameters[type] ?? []).filter((name) =>
     payload[name] !== undefined
   );
@@ -1155,7 +1185,7 @@ async function adminRoutes(request: Request, path: string) {
     const created = await rpc(adminClient, "admin_create_worker", {
       p_id: input.id,
       p_name: input.name ?? input.id,
-      p_types: input.types,
+      p_types: [],
       p_pool_id: input.pool_id ?? "00000000-0000-0000-0000-000000000001",
     });
     const requestURL = request.url;
@@ -1232,13 +1262,24 @@ async function handle(request: Request) {
 }
 
 async function wakeMaintenance(path: string) {
-  const secret = Deno.env.get("CRON_SECRET");
   if (
-    !secret ||
     !(["/v1/workers/pending", "/v1/workers/complete", "/v1/workers/fail"]
       .includes(path) || path.startsWith("/v1/jobs"))
   ) return;
   const tasks: Promise<unknown>[] = [];
+  const { data: reclaim } = await service.rpc("claim_maintenance", {
+    p_name: "leases",
+    p_interval_seconds: 10,
+  });
+  if (reclaim === true) {
+    tasks.push(Promise.resolve(service.rpc("reclaim_expired_jobs")));
+  }
+
+  const secret = Deno.env.get("CRON_SECRET");
+  if (!secret) {
+    if (tasks.length) await Promise.allSettled(tasks);
+    return;
+  }
   for (
     const item of [{ name: "webhooks", seconds: 10, fn: "webhook-dispatch" }, {
       name: "cleanup",

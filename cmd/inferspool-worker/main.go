@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 )
 
 var version = "dev"
@@ -73,6 +74,7 @@ func runCLI(args []string) int {
 		return 2
 	}
 	registry := NewServiceRegistry(specs)
+	registry.EnableDirectResults(cfg.DirectURL != "")
 	switch args[0] {
 	case "status":
 		return commandStatus(context.Background(), registry, jsonOut)
@@ -163,7 +165,17 @@ func commandDoctor(ctx context.Context, cfg Config, registry *ServiceRegistry, j
 
 func commandRun(cfg Config, registry *ServiceRegistry) int {
 	client := NewQueueClient(cfg)
-	handlers := newHandlers(cfg, client, registry)
+	direct := NewDirectResultServer(cfg)
+	if err := direct.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = direct.Close(ctx)
+	}()
+	handlers := newHandlers(cfg, client, registry, direct)
 	supervisor, err := buildSupervisor(cfg, registry.Types())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -118,8 +118,8 @@ Auth sessions and Realtime channels.
 5. Add Worker unit/E2E, SQL and browser coverage as applicable.
 
 Backends are described by configuration rather than subclasses. Keep model
-selection on the GPU side; the product API should expose task capabilities,
-not concrete model names.
+selection on the GPU side; the product API should expose generic task
+parameters, not concrete model names.
 
 ## Before opening a PR
 

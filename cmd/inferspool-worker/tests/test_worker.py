@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -58,7 +59,10 @@ class WorkerProcess:
     def __init__(self, binary: Path, pg_url: str, urls: dict[str, str],
                  extra: dict[str, str] | None = None) -> None:
         env = {key: value for key, value in os.environ.items()
-               if not (key.startswith("INFERSPOOL_") and key.endswith(
+               if key not in ("INFERSPOOL_DIRECT_LISTEN",
+                              "INFERSPOOL_DIRECT_URL",
+                              "INFERSPOOL_DIRECT_TTL_SECS")
+               and not (key.startswith("INFERSPOOL_") and key.endswith(
                    ("_LAUNCH", "_STOP", "_CWD", "_READY_TIMEOUT",
                     "_IDLE_TIMEOUT", "_WARMUP_SECS", "_WORKFLOW")))}
         env.update({
@@ -117,6 +121,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as temp:
         binary = build_worker(Path(temp))
         run_core_scenarios(binary, pg_url, urls)
+        run_direct_result_scenario(binary, pg_url, urls)
         run_on_demand_scenario(binary, pg_url, urls, Path(temp))
     return check.report("Go worker end-to-end tests")
 
@@ -169,6 +174,8 @@ def run_core_scenarios(binary: Path, pg_url: str,
               "image requests use the vLLM-Omni base64 response format")
         check(stubs.TtsState.last_request.get("input") == "read this",
               "TTS requests use the OpenAI-compatible input field")
+        check(stubs.TtsState.last_request.get("response_format") == "opus",
+              "TTS defaults to compressed Opus output")
         check(len(PostgrestHandler.uploads) >= 3,
               "signed uploads carry image, video and audio bytes")
         check(wait_until(lambda: sql("select count(*) from worker_services") == "4"),
@@ -248,7 +255,7 @@ def run_core_scenarios(binary: Path, pg_url: str,
 
 def run_on_demand_scenario(binary: Path, pg_url: str, urls: dict[str, str],
                            directory: Path) -> None:
-    reset_db(capabilities="{llm}")
+    reset_db()
     import socket
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -278,6 +285,44 @@ def run_on_demand_scenario(binary: Path, pg_url: str, urls: dict[str, str],
               "queued work starts an on-demand backend")
         check(wait_until(lambda: not port_open(port), 15),
               "idle timeout stops the managed backend")
+    finally:
+        worker.stop()
+
+
+def run_direct_result_scenario(binary: Path, pg_url: str,
+                               urls: dict[str, str]) -> None:
+    reset_db()
+    PostgrestHandler.uploads.clear()
+    stubs.ImageState.healthy = True
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    direct_url = f"http://127.0.0.1:{port}"
+    worker = WorkerProcess(binary, pg_url, urls, {
+        "INFERSPOOL_DIRECT_LISTEN": f"127.0.0.1:{port}",
+        "INFERSPOOL_DIRECT_URL": direct_url,
+        "INFERSPOOL_DIRECT_TTL_SECS": "60",
+    })
+    try:
+        check(wait_until(lambda: sql(
+            "select parameter_schema->'_result_delivery'->'enum' ? 'direct' "
+            "from worker_services where worker_id='home-gpu' and type='image'"
+        ) == "t", 20), "worker advertises direct result delivery")
+        job = enqueue("image", {
+            "prompt": "LAN result", "_result_delivery": "direct",
+        })
+        check(wait_for(job, ("succeeded",), 45) == "succeeded",
+              "direct image task completes")
+        url = sql(f"select result->'files'->0->>'url' from jobs where id='{job}'")
+        check(url.startswith(direct_url + "/result/"),
+              "direct result points to the configured worker address")
+        with urllib.request.urlopen(url, timeout=10) as response:
+            body = response.read()
+        check(response.status == 200 and len(body) > 20,
+              "browser can download the result directly from the worker")
+        check(not PostgrestHandler.uploads,
+              "direct result bypasses cloud Storage upload")
     finally:
         worker.stop()
 

@@ -209,9 +209,12 @@ type WebhookInfo struct {
 }
 
 type WorkerInfo struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	Capabilities  []string   `json:"capabilities"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Services []struct {
+		Type    string `json:"type"`
+		Healthy bool   `json:"healthy"`
+	} `json:"services"`
 	DisabledAt    *time.Time `json:"disabled_at"`
 	LastHeartbeat *time.Time `json:"last_heartbeat"`
 }
@@ -253,9 +256,9 @@ func (c *AccountClient) AdminListWorkers() ([]WorkerInfo, error) {
 	err := c.authRequest(http.MethodGet, "/v1/admin/workers", nil, &out)
 	return out, err
 }
-func (c *AccountClient) AdminCreateWorker(id, name string, types []string) (map[string]any, error) {
+func (c *AccountClient) AdminCreateWorker(id, name string) (map[string]any, error) {
 	var out map[string]any
-	err := c.authRequest(http.MethodPost, "/v1/admin/workers", map[string]any{"id": id, "name": name, "types": types}, &out)
+	err := c.authRequest(http.MethodPost, "/v1/admin/workers", map[string]any{"id": id, "name": name}, &out)
 	return out, err
 }
 func (c *AccountClient) AdminWorkerAction(id, action string) (map[string]any, error) {

@@ -51,14 +51,13 @@ def sql(query: str, db: str = DB) -> str:
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
-def reset_db(capabilities: str = "{llm,image,video,tts}",
-             worker_id: str = "home-gpu", token: str = "tok") -> None:
+def reset_db(worker_id: str = "home-gpu", token: str = "tok") -> None:
     """Clean slate: one user, one worker, no jobs."""
     sql("truncate jobs cascade; delete from worker_services; "
         "delete from api_keys; delete from workers; delete from auth.users;")
     sql(f"insert into auth.users (id) values ('{ALICE}'), ('{BOB}')")
     sql(f"insert into workers (id, capabilities, token_hash, last_heartbeat) "
-        f"values ('{worker_id}', '{capabilities}', "
+        f"values ('{worker_id}', '{{}}', "
         f"extensions.crypt('{token}', extensions.gen_salt('bf')), now())")
 
 

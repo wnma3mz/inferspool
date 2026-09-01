@@ -14,8 +14,8 @@ delete from auth.users;
 
 insert into auth.users (id) values (:'alice');
 insert into workers (id, capabilities, token_hash, last_heartbeat) values
-  ('gpu-1', '{llm,image,video}', extensions.crypt('t1', extensions.gen_salt('bf')), now()),
-  ('gpu-2', '{image}',           extensions.crypt('t2', extensions.gen_salt('bf')), now());
+  ('gpu-1', '{}',      extensions.crypt('t1', extensions.gen_salt('bf')), now()),
+  ('gpu-2', '{video}', extensions.crypt('t2', extensions.gen_salt('bf')), now());
 
 -- 1. report_services -------------------------------------------------------
 do $$
@@ -88,7 +88,7 @@ begin
   end;
 end $$;
 
--- 2. Per-type gating: the whole point of the registry --------------------
+-- 2. Per-type gating: the service report is the source of truth ----------
 do $$
 declare v_key text; v_n int;
 begin
@@ -103,7 +103,14 @@ begin
   perform submit_job(v_key, 'image', '{"prompt":"image"}'::jsonb);
   perform submit_job(v_key, 'video', '{"prompt":"video"}'::jsonb);
 
-  -- The worker reports that only llm is up, so only llm may be claimed.
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object('type','llm','healthy',true),
+    jsonb_build_object('type','image','healthy',false),
+    jsonb_build_object('type','video','healthy',false)
+  ));
+
+  -- Only the healthy reported type may be claimed. The legacy capability
+  -- column is empty and must not restrict the dynamic report.
   select count(*) into v_n
   from claim_jobs('gpu-1', 't1', '{llm}', 8, 60);
   perform assert(v_n = 1, 'only the live type is claimed');
@@ -116,26 +123,100 @@ begin
                  'attempts are not burned for a down service');
 
   -- image comes up: it becomes claimable, video still does not.
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object('type','llm','healthy',true),
+    jsonb_build_object('type','image','healthy',true),
+    jsonb_build_object('type','video','healthy',false)
+  ));
   select count(*) into v_n
   from claim_jobs('gpu-1', 't1', '{llm,image}', 8, 60);
   perform assert(v_n = 1, 'image becomes claimable once its service is up');
   perform assert((select status from jobs where type = 'video') = 'queued',
                  'video is still gated');
 
-  -- A worker cannot widen its own permissions by claiming an unconfigured type.
+  -- Passing a type that was never reported cannot widen the live set.
   select count(*) into v_n
   from claim_jobs('gpu-2', 't2', '{llm,image,video}', 8, 60);
   perform assert(v_n = 0,
-                 'a worker cannot claim types outside its capabilities');
+                 'a worker cannot claim types it has not reported');
 
-  -- An empty list claims nothing; null means "everything I am configured
-  -- for", which is what a worker with no health filter would want.
+  -- An empty list claims nothing; null means every currently healthy report.
   select count(*) into v_n
   from claim_jobs('gpu-1', 't1', '{}', 8, 60);
   perform assert(v_n = 0, 'an empty type list claims nothing');
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object('type','video','healthy',true)
+  ));
   select count(*) into v_n
   from claim_jobs('gpu-1', 't1', null, 8, 60);
-  perform assert(v_n = 1, 'a null type list means all capabilities');
+  perform assert(v_n = 1, 'a null type list means all healthy reported services');
+
+  insert into jobs(user_id,type,payload) values(
+    '11111111-1111-1111-1111-111111111111','image','{"prompt":"stale"}');
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object('type','image','healthy',true)
+  ));
+  update worker_services set last_check=now()-interval '91 seconds'
+  where worker_id='gpu-1' and type='image';
+  select count(*) into v_n
+  from claim_jobs('gpu-1', 't1', '{image}', 8, 60);
+  perform assert(v_n = 0, 'a stale service report cannot receive work');
+end $$;
+
+-- 2b. Direct results require an explicitly advertised worker endpoint -------
+do $$
+declare v_key text; v_n int;
+begin
+  truncate jobs cascade;
+  select create_api_key('direct-delivery') into v_key;
+  perform submit_job(v_key, 'image',
+    '{"prompt":"lan only","_result_delivery":"direct"}'::jsonb);
+
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object(
+      'type','image','healthy',true,
+      'parameter_schema',jsonb_build_object(
+        '_result_delivery',jsonb_build_object('type','string','enum',jsonb_build_array('cloud'))
+      )
+    )
+  ));
+  select count(*) into v_n from pending_by_type('gpu-1','t1');
+  perform assert(v_n=0,'cloud-only worker does not see a direct-delivery job');
+  select count(*) into v_n from claim_jobs('gpu-1','t1','{image}',1,60);
+  perform assert(v_n=0,'cloud-only worker cannot claim a direct-delivery job');
+
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object(
+      'type','image','healthy',true,
+      'parameter_schema',jsonb_build_object(
+        '_result_delivery',jsonb_build_object('type','string','enum',jsonb_build_array('cloud','direct'))
+      )
+    )
+  ));
+  select count(*) into v_n from pending_by_type('gpu-1','t1');
+  perform assert(v_n=1,'direct-capable worker sees direct-delivery demand');
+  select count(*) into v_n from claim_jobs('gpu-1','t1','{image}',1,60);
+  perform assert(v_n=1,'direct-capable worker claims direct-delivery work');
+end $$;
+
+do $$
+begin
+  begin
+    insert into jobs(user_id,type,payload) values(
+      '11111111-1111-1111-1111-111111111111','image',
+      '{"prompt":"bad delivery","_result_delivery":"unknown"}');
+    raise exception 'expected invalid result delivery to fail';
+  exception when check_violation then
+    perform assert(true,'database rejects unknown result delivery modes');
+  end;
+  begin
+    insert into jobs(user_id,type,payload) values(
+      '11111111-1111-1111-1111-111111111111','llm',
+      '{"prompt":"inline result","_result_delivery":"direct"}');
+    raise exception 'expected direct LLM result to fail';
+  exception when check_violation then
+    perform assert(true,'database rejects direct delivery for inline LLM results');
+  end;
 end $$;
 
 -- 3. pending_by_type -------------------------------------------------------
@@ -152,16 +233,25 @@ begin
   perform submit_job(v_key, 'llm',   '{"prompt":"b"}'::jsonb);
   perform submit_job(v_key, 'image', '{"prompt":"image"}'::jsonb);
 
+  perform report_services('gpu-1', 't1', jsonb_build_array(
+    jsonb_build_object('type','llm','healthy',true),
+    jsonb_build_object('type','image','healthy',false)
+  ));
+  perform report_services('gpu-2', 't2', jsonb_build_array(
+    jsonb_build_object('type','image','healthy',false)
+  ));
+
   select jsonb_object_agg(type, n) into v_counts
   from pending_by_type('gpu-1', 't1');
   perform assert((v_counts->>'llm')::int = 2, 'pending_by_type counts llm');
   perform assert((v_counts->>'image')::int = 1, 'pending_by_type counts image');
 
-  -- gpu-2 only declares image, so it must not see llm work.
+  -- gpu-2 only reports image, so it must not see llm work. Health does not
+  -- matter here because pending demand is also used to start on-demand models.
   select jsonb_object_agg(type, n) into v_counts
   from pending_by_type('gpu-2', 't2');
   perform assert(v_counts->'llm' is null,
-                 'pending_by_type respects capabilities');
+                 'pending_by_type respects reported service types');
   perform assert((v_counts->>'image')::int = 1,
                  'gpu-2 sees the image job');
 end $$;

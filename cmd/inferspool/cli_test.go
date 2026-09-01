@@ -11,7 +11,7 @@ import (
 func TestParseFlagsMixedOrder(t *testing.T) {
 	// Positional arguments and flags must work in any order, which is why this
 	// does not use the stdlib FlagSet.
-	f, err := parseFlags([]string{"llm", "--priority", "5", "hello", "-w", "world"})
+	f, err := parseFlags([]string{"image", "--priority", "5", "hello", "-w", "--direct", "world"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -21,8 +21,11 @@ func TestParseFlagsMixedOrder(t *testing.T) {
 	if !f.wait {
 		t.Error("wait should be set")
 	}
-	if got := strings.Join(f.rest, " "); got != "llm hello world" {
-		t.Errorf("rest = %q, want \"llm hello world\"", got)
+	if !f.direct {
+		t.Error("direct should be set")
+	}
+	if got := strings.Join(f.rest, " "); got != "image hello world" {
+		t.Errorf("rest = %q, want \"image hello world\"", got)
 	}
 }
 
@@ -107,6 +110,36 @@ func TestStableTaskFlagsBuildPayload(t *testing.T) {
 	}
 	if _, err := buildPayload("image", "bad", flags{temperature: "0.5"}); err == nil {
 		t.Fatal("llm-only flags must be rejected")
+	}
+}
+
+func TestDirectDeliveryBuildPayload(t *testing.T) {
+	f, err := parseFlags([]string{"--direct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, jobType := range []string{"image", "video", "tts"} {
+		payload, err := buildPayload(jobType, "hello", f)
+		if err != nil {
+			t.Fatalf("%s: %v", jobType, err)
+		}
+		if payload["_result_delivery"] != "direct" {
+			t.Errorf("%s payload=%#v", jobType, payload)
+		}
+	}
+	if _, err := buildPayload("llm", "hello", f); err == nil || !strings.Contains(err.Error(), "image, video, and tts") {
+		t.Fatalf("llm --direct error=%v", err)
+	}
+
+	payload, err := buildPayload("image", "hello", flags{
+		direct:  true,
+		payload: `{"_result_delivery":"cloud"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload["_result_delivery"] != "direct" {
+		t.Fatalf("--direct must override the generic payload field: %#v", payload)
 	}
 }
 

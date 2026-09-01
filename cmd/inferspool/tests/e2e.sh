@@ -93,6 +93,16 @@ P=$("$BIN" submit llm "custom" --payload '{"max_tokens":64}')
 [ "$(sql "select payload->>'max_tokens' from jobs where id='$P'")" = "64" ]
 check $? "--payload merges extra fields"
 
+# --direct is the native spelling for LAN delivery of file results.
+D=$("$BIN" submit image "local result" --direct)
+[ "$(sql "select payload->>'_result_delivery' from jobs where id='$D'")" = "direct" ]
+check $? "--direct requests LAN result delivery"
+if "$BIN" submit llm "inline result" --direct >/dev/null 2>&1; then
+  check 1 "--direct rejects inline llm tasks"
+else
+  check 0 "--direct rejects inline llm tasks"
+fi
+
 # Local images are uploaded privately and attached by object reference.
 python3 - "$CFG/input.png" <<'PY'
 import struct,sys,zlib

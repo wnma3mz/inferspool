@@ -85,6 +85,10 @@ function duration(job: Job): string | null {
   }s`;
 }
 
+function hasDirectResult(job: Job): boolean {
+	return resultFiles(job).some((file) => file.delivery === "direct");
+}
+
 export function JobRow(
   { job, onChanged }: { job: Job; onChanged?: () => void },
 ) {
@@ -201,7 +205,7 @@ export function JobRow(
             {acting === "retry" ? "…" : (zh ? "重试" : "Retry")}
           </button>
         )}
-        {isTerminal(job.status) && (
+		{isTerminal(job.status) && !hasDirectResult(job) && (
           <button
             className="task-action"
             onClick={() => void act("keep")}
@@ -233,16 +237,24 @@ function resultFiles(job: Job): ResultFile[] {
     : [];
   return [...files, ...single].filter((file): file is ResultFile =>
     !!file && typeof file === "object" &&
-    typeof (file as ResultFile).path === "string"
-  );
+		(typeof (file as ResultFile).path === "string" ||
+		  typeof (file as ResultFile).url === "string")
+	);
 }
 
 function useResultUrl(jobId: string, file: ResultFile | undefined) {
   const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    if (!file) return;
-    void signedResultUrl(jobId, file.bucket, file.path)
+	useEffect(() => {
+		let active = true;
+		if (!file) return;
+		if (file.delivery === "direct" && file.url) {
+			setUrl(file.url);
+			return () => {
+				active = false;
+			};
+		}
+		if (!file.bucket || !file.path) return;
+		void signedResultUrl(jobId, file.bucket, file.path)
       .then((value) => {
         if (active) setUrl(value);
       })
@@ -252,7 +264,7 @@ function useResultUrl(jobId: string, file: ResultFile | undefined) {
     return () => {
       active = false;
     };
-  }, [jobId, file?.bucket, file?.path]);
+	}, [jobId, file?.bucket, file?.path, file?.url, file?.delivery]);
   return url;
 }
 
@@ -277,7 +289,7 @@ function JobResult({ job, zh }: { job: Job; zh: boolean }) {
   return (
     <div className="result-files">
       {files.map((file) => (
-        <ResultFileView key={file.path} jobId={job.id} file={file} zh={zh} />
+		<ResultFileView key={file.path ?? file.url} jobId={job.id} file={file} zh={zh} />
       ))}
     </div>
   );
@@ -286,30 +298,44 @@ function JobResult({ job, zh }: { job: Job; zh: boolean }) {
 function ResultFileView(
   { jobId, file, zh }: { jobId: string; file: ResultFile; zh: boolean },
 ) {
-  const url = useResultUrl(jobId, file);
+	const url = useResultUrl(jobId, file);
   if (!url) {
     return (
       <span className="result-loading">
         {zh ? `正在加载 ${file.filename}…` : `Loading ${file.filename}…`}
       </span>
     );
-  }
-  if (file.mime.startsWith("image/")) {
-    return (
-      <a href={url} target="_blank" rel="noreferrer">
-        <img className="result-image" src={url} alt={file.filename} />
-      </a>
-    );
-  }
-  if (file.mime.startsWith("audio/")) return <audio controls src={url} />;
-  if (file.mime.startsWith("video/")) {
-    return <video className="result-video" controls src={url} />;
-  }
-  return (
-    <a className="result-download" href={url} target="_blank" rel="noreferrer">
-      {zh ? `下载 ${file.filename}` : `Download ${file.filename}`}
-    </a>
-  );
+	}
+	const expiry = file.delivery === "direct" && file.expires_at
+		? (
+		  <small className="field-hint">
+			{zh ? "局域网临时结果，过期时间：" : "Temporary LAN result, expires: "}
+			{new Date(file.expires_at).toLocaleString()}
+		  </small>
+		)
+		: null;
+	if (file.mime.startsWith("image/")) {
+		return (
+		  <div>
+			<a href={url} target="_blank" rel="noreferrer">
+			  <img className="result-image" src={url} alt={file.filename} />
+			</a>
+			{expiry}
+		  </div>
+		);
+	}
+	if (file.mime.startsWith("audio/")) return <div><audio controls src={url} />{expiry}</div>;
+	if (file.mime.startsWith("video/")) {
+		return <div><video className="result-video" controls src={url} />{expiry}</div>;
+	}
+	return (
+		<div>
+		  <a className="result-download" href={url} target="_blank" rel="noreferrer">
+			{zh ? `下载 ${file.filename}` : `Download ${file.filename}`}
+		  </a>
+		  {expiry}
+		</div>
+	);
 }
 
 export function JobList(

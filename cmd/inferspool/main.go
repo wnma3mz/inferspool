@@ -149,6 +149,7 @@ Flags:
       --fps <n>         generated video frame rate
       --speed <n>       text-to-speech speed (0.25-4)
       --format <name>   text-to-speech output format
+      --direct         deliver file results directly from a LAN worker
       --image <src>   attach an image to an llm task (repeatable; file or HTTPS URL)
       --stdin         read the prompt from stdin
       --timeout <s>   give up waiting after N seconds
@@ -159,6 +160,7 @@ Examples:
   inferspool login user@example.com
   inferspool submit llm "explain leases" --wait
   inferspool submit image "a cat riding a bicycle" -w
+  inferspool submit image "a cat riding a bicycle" --direct --wait
   echo "read this aloud" | inferspool submit tts --stdin
   inferspool batch llm prompts.txt --wait
   inferspool status
@@ -174,6 +176,7 @@ type flags struct {
 	quiet       bool
 	jsonOut     bool
 	stdin       bool
+	direct      bool
 	limit       int
 	priority    int
 	timeout     int
@@ -224,6 +227,8 @@ func parseFlags(args []string) (flags, error) {
 			f.jsonOut = true
 		case "--stdin":
 			f.stdin = true
+		case "--direct":
+			f.direct = true
 		case "-n", "--limit":
 			var v string
 			if v, err = next(); err == nil {

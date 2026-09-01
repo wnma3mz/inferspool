@@ -45,13 +45,20 @@ Retention cleanup skips rows explicitly marked to keep.
 
 The Worker checks in this order:
 
-1. Is there compatible queued work?
+1. Is there queued work for a service type this Worker has reported?
 2. Is the corresponding local backend healthy, or can it be started?
-3. Claim only work the backend can run.
+3. Publish the latest probe result.
+4. Claim only work whose service report is healthy and less than 90 seconds old.
 
 Queued work is the reason to start an on-demand backend. Probing first would
 observe an intentionally stopped service and never start it. Claiming before a
 backend is ready would waste an attempt while a model is still loading.
+
+There is no per-Worker capability allowlist in the scheduling path. Configured
+local endpoints are discovered through `report_services`; removing an endpoint
+from the Worker configuration removes its service row on the next report. The
+claim statement rechecks the report atomically, so a stale pending response
+cannot send work to a backend that has since failed.
 
 Claims use one atomic statement with `FOR UPDATE SKIP LOCKED`, ordered by
 priority and eligibility time. Concurrent Workers therefore cannot receive the
@@ -60,12 +67,11 @@ same job.
 ### Leases and recovery
 
 A claim grants a finite lease. A batch heartbeat renews every active job while
-handlers execute. If the Worker disappears, the next claim operation recovers
-expired rows with exponential backoff. Jobs reaching `max_attempts` become
-`failed`, so a permanently broken task cannot consume GPU capacity forever.
-
-Recovery runs inside the claim path, not in a separate scheduler. It executes at
-the moment another Worker needs the recovered work and adds no cron dependency.
+handlers execute. If the Worker disappears, claim and pending operations recover
+expired rows with exponential backoff. Product API maintenance also invokes the
+same recovery path while clients poll jobs, so recovery does not depend on
+another Worker becoming ready. Each lost attempt records `worker lost; lease
+expired`; jobs reaching `max_attempts` become `failed` with retries exhausted.
 
 Every Worker mutation is a single statement guarded by both job status and
 Worker ownership. This prevents a process that resumes after its lease expired
@@ -87,8 +93,8 @@ status updates, not a token transport.
 ## Backend registry and process supervision
 
 Each configured job type has an independent `ServiceSpec`, health state,
-capacity and advertised parameter schema. One unhealthy backend blocks only its
-own task type.
+capacity and advertised parameter schema. These reports are the Worker's
+dynamic capabilities. One unhealthy backend blocks only its own task type.
 
 vLLM performs continuous batching, so LLM capacity may be greater than one.
 Image and video capacity defaults to one unless the local Omni deployment is
@@ -117,6 +123,10 @@ single-card memory use.
   online.
 - Result objects are private. Job records contain object path, MIME type and size;
   authorized clients receive short-lived download URLs.
+- File results support `cloud` and opt-in `direct` delivery. Cloud results use
+  private Storage after conservative compression. Direct results use a
+  high-entropy LAN URL and remain only in bounded Worker memory until their
+  TTL; scheduling sends them only to Workers advertising direct delivery.
 
 Realtime is a fast path, not the source of truth. Job mutations broadcast to a
 job-specific topic and a user-list topic. The Web app also polls every four

@@ -180,15 +180,17 @@ async function idempotencyKey(
 }
 
 export async function submitJob(
-  type: JobType,
-  payload: Record<string, unknown>,
+	type: JobType,
+	payload: Record<string, unknown>,
+	delivery: "cloud" | "direct" = "cloud",
 ) {
-  return api<Job>("/jobs", {
+	const submittedPayload = { ...payload, _result_delivery: delivery };
+	return api<Job>("/jobs", {
     method: "POST",
     body: jsonBody({
       type,
-      payload,
-      idempotency_key: await idempotencyKey(type, payload),
+		payload: submittedPayload,
+		idempotency_key: await idempotencyKey(type, submittedPayload),
     }),
   });
 }

@@ -18,6 +18,8 @@ insert into auth.users (id) values
 insert into workers (id, capabilities, token_hash) values
   ('home-gpu', '{image,tts}', extensions.crypt('secret-a', extensions.gen_salt('bf'))),
   ('other-gpu', '{image}',     extensions.crypt('secret-b', extensions.gen_salt('bf')));
+select report_services('home-gpu', 'secret-a', '[{"type":"image","healthy":true},{"type":"tts","healthy":true}]');
+select report_services('other-gpu', 'secret-b', '[{"type":"image","healthy":true}]');
 
 -- 1. Auth ------------------------------------------------------------------
 do $$
@@ -45,7 +47,7 @@ begin
   perform assert(v_job.id is null, 'empty queue yields null');
 end $$;
 
--- 3. Capability routing ----------------------------------------------------
+-- 3. Reported-service routing ---------------------------------------------
 do $$
 declare
   v_tts uuid;
@@ -55,12 +57,12 @@ begin
   values ('11111111-1111-1111-1111-111111111111', 'tts', '{"text":"hi"}')
   returning id into v_tts;
 
-  -- other-gpu only declares {image}, so it must not see the tts job.
+  -- other-gpu only reports image, so it must not see the tts job.
   v_job := claim_one('other-gpu', 'secret-b');
-  perform assert(v_job.id is null, 'worker skips job outside capabilities');
+  perform assert(v_job.id is null, 'worker skips jobs without a reported service');
 
   v_job := claim_one('home-gpu', 'secret-a');
-  perform assert(v_job.id = v_tts, 'capable worker claims the job');
+  perform assert(v_job.id = v_tts, 'worker with a healthy reported service claims the job');
   perform assert(v_job.status = 'running', 'claimed job is running');
   perform assert(v_job.attempts = 1, 'claim increments attempts');
   perform assert(v_job.lease_expires_at > now(), 'claim sets a lease');
@@ -161,6 +163,9 @@ begin
                  'expired lease returns job to queue');
   perform assert((select worker_id from jobs where id = v_id) is null,
                  'reclaim clears worker_id');
+  perform assert((select error from jobs where id = v_id)
+                 like 'worker lost; lease expired after attempt 1; retry scheduled',
+                 'requeued job exposes why the attempt was lost');
 
   -- ...but is picked up once backoff elapses.
   update jobs set can_start_at = now() where id = v_id;
@@ -201,6 +206,25 @@ begin
 
   perform assert((select result from jobs where id = v_id) is null,
                  'zombie did not overwrite result');
+end $$;
+
+-- 8b. API maintenance reclaims a lost worker without another claim --------
+do $$
+declare v_id uuid; v_job jobs; v_reclaimed int;
+begin
+  truncate jobs cascade;
+  insert into jobs (user_id, type, payload)
+  values ('11111111-1111-1111-1111-111111111111', 'image', '{}') returning id into v_id;
+
+  v_job := claim_one('home-gpu', 'secret-a', 60);
+  update jobs set lease_expires_at = now() - interval '1 second' where id = v_id;
+  v_reclaimed := reclaim_expired_jobs();
+  perform assert(v_reclaimed = 1, 'maintenance reports one reclaimed lease');
+  perform assert((select status from jobs where id = v_id) = 'queued',
+                 'maintenance requeues a lost worker attempt');
+  perform assert((select error from jobs where id = v_id)
+                 like 'worker lost; lease expired%retry scheduled',
+                 'maintenance records the lost worker error');
 end $$;
 
 -- 9. Retry exhaustion -----------------------------------------------------
@@ -253,7 +277,8 @@ begin
   v_job := claim_one('home-gpu', 'secret-a');
   perform assert((select status from jobs where id = v_id) = 'failed',
                  'exhausted job is failed, not requeued forever');
-  perform assert((select error from jobs where id = v_id) like 'lease expired%',
+  perform assert((select error from jobs where id = v_id)
+                 like 'worker lost; lease expired%retries exhausted',
                  'reclaim records why it failed');
 end $$;
 
