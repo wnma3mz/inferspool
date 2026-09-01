@@ -91,6 +91,11 @@ func (h *Handlers) deliverResult(ctx context.Context, job Job, filename, mime st
 	return result, err
 }
 
+func artifact(kind string, result map[string]any) map[string]any {
+	result["kind"] = kind
+	return result
+}
+
 func compressImage(content []byte) ([]byte, string, string) {
 	image, err := png.Decode(bytes.NewReader(content))
 	if err != nil {
@@ -392,7 +397,7 @@ func (h *Handlers) runImage(ctx context.Context, job Job, batch *BatchContext, h
 	if len(response.Data) == 0 {
 		return nil, errors.New("image service returned no images")
 	}
-	files := make([]map[string]any, 0, len(response.Data))
+	artifacts := make([]map[string]any, 0, len(response.Data))
 	for index, item := range response.Data {
 		content, err := base64.StdEncoding.DecodeString(item.Base64)
 		if err != nil {
@@ -403,10 +408,9 @@ func (h *Handlers) runImage(ctx context.Context, job Job, batch *BatchContext, h
 		if err != nil {
 			return nil, err
 		}
-		uploaded["kind"] = "images"
-		files = append(files, uploaded)
+		artifacts = append(artifacts, artifact("image", uploaded))
 	}
-	return map[string]any{"files": files, "type": "image"}, nil
+	return map[string]any{"artifacts": artifacts}, nil
 }
 
 func (h *Handlers) runVideo(ctx context.Context, job Job, batch *BatchContext, health ServiceHealth) (map[string]any, error) {
@@ -445,7 +449,7 @@ func (h *Handlers) runVideo(ctx context.Context, job Job, batch *BatchContext, h
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"file": uploaded, "type": "video"}, nil
+	return map[string]any{"artifacts": []map[string]any{artifact("video", uploaded)}}, nil
 }
 
 func (h *Handlers) runTTS(ctx context.Context, job Job, batch *BatchContext, health ServiceHealth) (map[string]any, error) {
@@ -484,7 +488,7 @@ func (h *Handlers) runTTS(ctx context.Context, job Job, batch *BatchContext, hea
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"file": uploaded, "type": "tts"}, nil
+	return map[string]any{"artifacts": []map[string]any{artifact("audio", uploaded)}}, nil
 }
 
 func extensionForMIME(mimeType, fallback string) string {

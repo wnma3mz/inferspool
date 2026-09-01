@@ -58,7 +58,7 @@ export function ServicePanel() {
         <Metric
           icon="activity"
           tone="blue"
-          label={zh ? "可用能力" : "Available capabilities"}
+          label={zh ? "可用服务" : "Available services"}
           value={healthyServices}
           note={zh
             ? `共 ${types.length} 种任务类型`
@@ -135,11 +135,21 @@ export function ServicePanel() {
           <div className="alert alert-warning" role="status">
             <Icon name="queue" /> {zh
               ? `${
-                stalled.map((type) => LABELS_ZH[type] ?? type).join("、")
-              }任务正在等待支持对应能力的节点上线。`
+                stalled.map((type) => {
+                  const label = LABELS_ZH[type] ?? type;
+                  return stats.services[type].total === 0
+                    ? `${label}没有已注册服务`
+                    : `${label}服务当前不可用`;
+                }).join("；")
+              }。任务会继续排队且不会消耗执行次数。`
               : `${
-                stalled.map((type) => LABELS[type] ?? type).join(", ")
-              } jobs are waiting for a compatible worker.`}
+                stalled.map((type) => {
+                  const label = LABELS[type] ?? type;
+                  return stats.services[type].total === 0
+                    ? `no ${label} service is registered`
+                    : `${label} is currently unavailable`;
+                }).join("; ")
+              }. Jobs remain queued without consuming attempts.`}
           </div>
         )}
 
@@ -171,7 +181,7 @@ export function ServicePanel() {
                   {(worker.services ?? []).length === 0
                     ? (
                       <span>
-                        {zh ? "尚未上报能力" : "No capabilities reported"}
+                        {zh ? "尚未上报服务" : "No services reported"}
                       </span>
                     )
                     : (worker.services ?? []).map((service) => (

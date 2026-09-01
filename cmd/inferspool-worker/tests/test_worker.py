@@ -164,11 +164,11 @@ def run_core_scenarios(binary: Path, pg_url: str,
               "queued image work resumes when vLLM-Omni recovers")
         check(sql(f"select result->>'text' from jobs where id='{llm}'").startswith("tok"),
               "streamed LLM output is persisted")
-        check(sql(f"select result->'file'->>'mime' from jobs where id='{speech}'")
+        check(sql(f"select result->'artifacts'->0->>'mime' from jobs where id='{speech}'")
               == "audio/wav", "TTS result records its private audio upload")
-        check(sql(f"select result->'files'->0->>'mime' from jobs where id='{image}'")
+        check(sql(f"select result->'artifacts'->0->>'mime' from jobs where id='{image}'")
               == "image/png", "image output is uploaded to private Storage")
-        check(sql(f"select result->'file'->>'mime' from jobs where id='{video}'")
+        check(sql(f"select result->'artifacts'->0->>'mime' from jobs where id='{video}'")
               == "video/mp4", "video output is uploaded to private Storage")
         check(stubs.ImageState.last_request.get("response_format") == "b64_json",
               "image requests use the vLLM-Omni base64 response format")
@@ -314,7 +314,7 @@ def run_direct_result_scenario(binary: Path, pg_url: str,
         })
         check(wait_for(job, ("succeeded",), 45) == "succeeded",
               "direct image task completes")
-        url = sql(f"select result->'files'->0->>'url' from jobs where id='{job}'")
+        url = sql(f"select result->'artifacts'->0->>'url' from jobs where id='{job}'")
         check(url.startswith(direct_url + "/result/"),
               "direct result points to the configured worker address")
         with urllib.request.urlopen(url, timeout=10) as response:

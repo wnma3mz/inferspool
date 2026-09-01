@@ -81,17 +81,18 @@ TTS=$("$BIN" submit tts "read this")
 [ "$(sql "select payload->>'text' from jobs where id='$TTS'")" = "read this" ]
 check $? "tts payload uses the text field"
 
-# flags can appear in any order; jobs select only a task type, not a model
-M=$("$BIN" submit llm --priority 3 "with flags")
+# Jobs select only a task type, not a model; scheduling stays fair.
+M=$("$BIN" submit llm "with flags")
 [ "$(sql "select payload ? 'model' from jobs where id='$M'")" = "f" ]
 check $? "submit payload does not select a model"
-[ "$(sql "select priority from jobs where id='$M'")" = "3" ]
-check $? "--priority is applied"
+[ "$(sql "select priority from jobs where id='$M'")" = "0" ]
+check $? "ordinary submission uses fair priority"
 
-# --payload merges extra fields
-P=$("$BIN" submit llm "custom" --payload '{"max_tokens":64}')
+# Experimental parameters have an explicit spelling and still go through the
+# API's dynamically reported Worker schema validation.
+P=$("$BIN" submit llm "custom" --experimental-json '{"max_tokens":64}')
 [ "$(sql "select payload->>'max_tokens' from jobs where id='$P'")" = "64" ]
-check $? "--payload merges extra fields"
+check $? "--experimental-json merges a declared field"
 
 # --direct is the native spelling for LAN delivery of file results.
 D=$("$BIN" submit image "local result" --direct)
@@ -181,9 +182,9 @@ check $? "cancel is persisted"
 # Private result paths become short-lived URLs for the API-key owner.
 RESULT_PATH="$ALICE/$TTS/audio.wav"
 sql "update jobs set status='succeeded',
-     result=jsonb_build_object('file', jsonb_build_object(
+     result=jsonb_build_object('artifacts', jsonb_build_array(jsonb_build_object(
        'bucket','results','path','$RESULT_PATH','filename','audio.wav',
-       'mime','audio/wav','bytes',42)) where id='$TTS'" > /dev/null
+       'kind','audio','mime','audio/wav','bytes',42))) where id='$TTS'" > /dev/null
 out=$("$BIN" get "$TTS")
 [[ "$out" == https://download.test/*audio.wav ]];
 check $? "get prints a signed URL for a private result"
@@ -214,8 +215,8 @@ sql "update api_keys set revoked_at = now() where prefix = '$(echo "$BOB_KEY" | 
 
 # 9. status: service counts
 "$BIN" config set-key "$ALICE_KEY" > /dev/null
-sql "insert into workers (id, capabilities, token_hash) values
-     ('gpu1','{llm,image}', extensions.crypt('t', extensions.gen_salt('bf')));
+sql "insert into workers (id, token_hash) values
+     ('gpu1', extensions.crypt('t', extensions.gen_salt('bf')));
      update workers set last_heartbeat = now();
      insert into worker_services (worker_id,type,name,healthy,capacity,last_check)
      values ('gpu1','llm','vllm',true,8,now()),

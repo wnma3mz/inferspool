@@ -56,8 +56,8 @@ def reset_db(worker_id: str = "home-gpu", token: str = "tok") -> None:
     sql("truncate jobs cascade; delete from worker_services; "
         "delete from api_keys; delete from workers; delete from auth.users;")
     sql(f"insert into auth.users (id) values ('{ALICE}'), ('{BOB}')")
-    sql(f"insert into workers (id, capabilities, token_hash, last_heartbeat) "
-        f"values ('{worker_id}', '{{}}', "
+    sql(f"insert into workers (id, token_hash, last_heartbeat) "
+        f"values ('{worker_id}', "
         f"extensions.crypt('{token}', extensions.gen_salt('bf')), now())")
 
 

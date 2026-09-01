@@ -16,8 +16,8 @@ truncate jobs cascade;
 delete from workers;
 delete from auth.users;
 insert into auth.users (id) values ('11111111-1111-1111-1111-111111111111');
-insert into workers (id, capabilities, token_hash)
-select 'w' || g, '{image}', extensions.crypt('t', extensions.gen_salt('bf'))
+insert into workers (id, token_hash)
+select 'w' || g, extensions.crypt('t', extensions.gen_salt('bf'))
 from generate_series(1, $CLIENTS) g;
 insert into worker_services(worker_id,type,healthy,last_check)
 select 'w' || g, 'image', true, now() from generate_series(1, $CLIENTS) g;

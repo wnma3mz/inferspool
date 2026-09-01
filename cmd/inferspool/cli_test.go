@@ -11,12 +11,9 @@ import (
 func TestParseFlagsMixedOrder(t *testing.T) {
 	// Positional arguments and flags must work in any order, which is why this
 	// does not use the stdlib FlagSet.
-	f, err := parseFlags([]string{"image", "--priority", "5", "hello", "-w", "--direct", "world"})
+	f, err := parseFlags([]string{"image", "hello", "-w", "--direct", "world"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if f.priority != 5 {
-		t.Errorf("priority = %d, want 5", f.priority)
 	}
 	if !f.wait {
 		t.Error("wait should be set")
@@ -113,6 +110,21 @@ func TestStableTaskFlagsBuildPayload(t *testing.T) {
 	}
 }
 
+func TestExperimentalJSONIsExplicitAndCannotOverrideRouting(t *testing.T) {
+	f, err := parseFlags([]string{"--experimental-json", `{"seed":42}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := buildPayload("image", "cat", f)
+	if err != nil || payload["seed"] != float64(42) {
+		t.Fatalf("payload=%#v err=%v", payload, err)
+	}
+	f.experimentalJSON = `{"prompt":"forged"}`
+	if _, err := buildPayload("image", "cat", f); err == nil {
+		t.Fatal("experimental JSON must not override routing fields")
+	}
+}
+
 func TestDirectDeliveryBuildPayload(t *testing.T) {
 	f, err := parseFlags([]string{"--direct"})
 	if err != nil {
@@ -131,15 +143,12 @@ func TestDirectDeliveryBuildPayload(t *testing.T) {
 		t.Fatalf("llm --direct error=%v", err)
 	}
 
-	payload, err := buildPayload("image", "hello", flags{
-		direct:  true,
-		payload: `{"_result_delivery":"cloud"}`,
-	})
+	payload, err := buildPayload("image", "hello", flags{direct: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if payload["_result_delivery"] != "direct" {
-		t.Fatalf("--direct must override the generic payload field: %#v", payload)
+		t.Fatalf("--direct must select direct delivery: %#v", payload)
 	}
 }
 

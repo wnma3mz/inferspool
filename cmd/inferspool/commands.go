@@ -23,9 +23,14 @@ func client() (*Client, error) {
 // buildPayload assembles the request body from the prompt plus optional flags.
 func buildPayload(jobType, text string, f flags) (map[string]any, error) {
 	payload := map[string]any{}
-	if f.payload != "" {
-		if err := json.Unmarshal([]byte(f.payload), &payload); err != nil {
-			return nil, fmt.Errorf("--payload is not valid JSON: %w", err)
+	if f.experimentalJSON != "" {
+		if err := json.Unmarshal([]byte(f.experimentalJSON), &payload); err != nil {
+			return nil, fmt.Errorf("--experimental-json is not valid JSON: %w", err)
+		}
+		for _, reserved := range []string{"prompt", "text", "images", "_result_delivery"} {
+			if _, exists := payload[reserved]; exists {
+				return nil, fmt.Errorf("--experimental-json cannot set reserved field %q", reserved)
+			}
 		}
 	}
 	if f.direct {
@@ -170,7 +175,7 @@ func cmdSubmit(args []string) (int, error) {
 		payload["images"] = refs
 	}
 
-	job, err := c.Submit(jobType, payload, f.priority, f.key)
+	job, err := c.Submit(jobType, payload, f.key)
 	if err != nil {
 		return 1, err
 	}
@@ -229,7 +234,7 @@ func cmdBatch(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		job, err := c.Submit(jobType, payload, f.priority,
+		job, err := c.Submit(jobType, payload,
 			batchKey(jobType, line, f.tag))
 		if err != nil {
 			return 1, err
@@ -383,19 +388,19 @@ func cmdCancel(args []string) (int, error) {
 	return 0, nil
 }
 
-func cmdRetry(args []string) (int, error) {
+func cmdRerun(args []string) (int, error) {
 	f, err := parseFlags(args)
 	if err != nil {
 		return 1, err
 	}
 	if len(f.rest) != 1 {
-		return 1, fmt.Errorf("retry needs a job id")
+		return 1, fmt.Errorf("rerun needs a job id")
 	}
 	c, err := client()
 	if err != nil {
 		return 1, err
 	}
-	job, err := c.Retry(f.rest[0])
+	job, err := c.Rerun(f.rest[0])
 	if err != nil {
 		return 1, err
 	}
@@ -423,29 +428,6 @@ func cmdDelete(args []string) (int, error) {
 		return 1, err
 	}
 	fmt.Println("deletion requested")
-	return 0, nil
-}
-
-func cmdKeep(args []string) (int, error) {
-	f, err := parseFlags(args)
-	if err != nil {
-		return 1, err
-	}
-	if len(f.rest) != 1 {
-		return 1, fmt.Errorf("keep needs a job id")
-	}
-	c, err := client()
-	if err != nil {
-		return 1, err
-	}
-	if err := c.Keep(f.rest[0], !f.unkeep); err != nil {
-		return 1, err
-	}
-	if f.unkeep {
-		fmt.Println("default retention restored")
-	} else {
-		fmt.Println("result kept")
-	}
 	return 0, nil
 }
 
@@ -616,7 +598,7 @@ func waitFor(c *Client, id string, f flags) (Job, error) {
 		}
 
 		if live {
-			line := fmt.Sprintf("%c %s", spinner[frame%len(spinner)], job.Status)
+			line := fmt.Sprintf("%c %s", spinner[frame%len(spinner)], stageLabel(job))
 			if job.Progress != nil {
 				line += fmt.Sprintf(" %.0f%%", *job.Progress*100)
 			}

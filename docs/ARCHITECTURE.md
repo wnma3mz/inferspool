@@ -34,12 +34,13 @@ mechanisms rather than the public automation API.
 queued ──claim──> running ──complete──> succeeded
    ▲                 │  │
    │                 │  ├─cancel──> canceled
-   └────retry────────┘  └─attempts exhausted──> failed
+   └────rerun────────┘  └─attempts exhausted──> failed
 ```
 
-User retry creates a new row with `source_job_id`; it does not overwrite the
-failed job. Deleting a job also deletes its private input and result objects.
-Retention cleanup skips rows explicitly marked to keep.
+Running a terminal job again creates a new row with `source_job_id`; it does
+not overwrite history. The same operation covers failures, cancellations,
+expired direct files and deliberate regeneration. Deleting a job also deletes
+its private input and result objects; otherwise fixed retention applies.
 
 ### Claim gate
 
@@ -111,10 +112,10 @@ single-card memory use.
 
 ## Data access and security
 
-- Users cannot update `jobs` directly. Cancel, retry, keep and delete operations
+- Users cannot update `jobs` directly. Cancel, rerun and delete operations
   are guarded server-side.
-- Insert triggers reset queue-owned columns and clamp priority/attempt values,
-  preventing forged history or arbitrary queue priority.
+- Insert triggers reset queue-owned columns and attempts. Ordinary users always
+  receive fair priority; only internal administrator operations may override it.
 - API keys are displayed once, stored as hashes and can only move toward revoked.
 - Worker tokens use bcrypt cost 12 and are displayed only at creation or rotation.
 - `workers` and `worker_services` have RLS enabled without client read policies;
@@ -126,7 +127,20 @@ single-card memory use.
 - File results support `cloud` and opt-in `direct` delivery. Cloud results use
   private Storage after conservative compression. Direct results use a
   high-entropy LAN URL and remain only in bounded Worker memory until their
-  TTL; scheduling sends them only to Workers advertising direct delivery.
+  TTL; scheduling sends them only to fresh, online Workers advertising direct
+  delivery. Prompts and job state still pass through the cloud control plane.
+- Database status remains deliberately small (`queued`, `running`, and terminal
+  states). The API derives a client-facing stage from service availability and
+  Worker progress, so Web and CLI can explain waits without maintaining a
+  second persistent state machine.
+- New multimedia results use one `artifacts` array for images, audio, video and
+  generic files. API responses normalize legacy `file`/`files` jobs so clients
+  only need the canonical shape.
+- Worker service reports and parameter schemas are the only capability source.
+  Ordinary users cannot set scheduler priority or indefinite retention.
+- The UI explains why work is waiting and how long it has waited, but does not
+  promise a queue position: fair user rotation, capacity and service cold starts
+  make an exact position misleading.
 
 Realtime is a fast path, not the source of truth. Job mutations broadcast to a
 job-specific topic and a user-list topic. The Web app also polls every four
@@ -135,8 +149,8 @@ the interface permanently stale.
 
 ## Scheduling and indexes
 
-Per-user active and daily limits are enforced transactionally. User-supplied
-priority is capped by the account profile. Queue indexes are partial indexes on
+Per-user active and daily limits are enforced transactionally. Ordinary
+submissions use the same fair priority. Queue indexes are partial indexes on
 queued/running rows, keeping them small as history grows.
 
 Retry backoff clamps the exponent before computing the interval. This prevents a

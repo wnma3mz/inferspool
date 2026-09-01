@@ -229,7 +229,7 @@ func (c *QueueClient) UploadResult(ctx context.Context, jobID, filename, mime st
 		b, _ := io.ReadAll(io.LimitReader(uploaded.Body, 4096))
 		return nil, fmt.Errorf("upload HTTP %d: %s", uploaded.StatusCode, b)
 	}
-	return map[string]any{"bucket": target.Bucket, "path": target.Path,
+	return map[string]any{"bucket": target.Bucket, "path": target.Path, "delivery": "cloud",
 		"filename": filename, "mime": mime, "bytes": len(content)}, nil
 }
 

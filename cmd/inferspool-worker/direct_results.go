@@ -122,7 +122,7 @@ func (d *DirectResultServer) Publish(filename, mime string, content []byte) (map
 func (d *DirectResultServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range")
 	w.Header().Set("Access-Control-Allow-Private-Network", "true")
 	w.Header().Set("Cache-Control", "no-store")
 	if r.Method == http.MethodOptions {

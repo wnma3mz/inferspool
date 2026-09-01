@@ -12,9 +12,9 @@ delete from workers;
 delete from auth.users;
 
 insert into auth.users (id) values (:'alice'), (:'bob');
-insert into workers (id, capabilities, token_hash) values
-  ('gpu-a', '{llm}',       extensions.crypt('tok-a', extensions.gen_salt('bf'))),
-  ('gpu-b', '{llm}',       extensions.crypt('tok-b', extensions.gen_salt('bf')));
+insert into workers (id, token_hash) values
+  ('gpu-a', extensions.crypt('tok-a', extensions.gen_salt('bf'))),
+  ('gpu-b', extensions.crypt('tok-b', extensions.gen_salt('bf')));
 select report_services('gpu-a', 'tok-a', '[{"type":"llm","healthy":true}]');
 select report_services('gpu-b', 'tok-b', '[{"type":"llm","healthy":true}]');
 
@@ -87,7 +87,7 @@ begin
 
   -- The insert trigger must still sanitise a key-authenticated submission.
   v_job := submit_job(v_key, 'llm', '{"prompt":"p"}'::jsonb, 9999);
-  perform assert(v_job.priority = 5, 'ordinary-user priority is clamped to profile limit');
+  perform assert(v_job.priority = 0, 'ordinary-user priority uses the fair default');
 
   -- Idempotency returns the original rather than raising.
   v_job  := submit_job(v_key, 'llm', '{"prompt":"a"}'::jsonb, 0, 'dedupe-1');

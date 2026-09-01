@@ -15,9 +15,9 @@ insert into auth.users (id) values
   ('11111111-1111-1111-1111-111111111111'),
   ('22222222-2222-2222-2222-222222222222');
 
-insert into workers (id, capabilities, token_hash) values
-  ('home-gpu', '{image,tts}', extensions.crypt('secret-a', extensions.gen_salt('bf'))),
-  ('other-gpu', '{image}',     extensions.crypt('secret-b', extensions.gen_salt('bf')));
+insert into workers (id, token_hash) values
+  ('home-gpu', extensions.crypt('secret-a', extensions.gen_salt('bf'))),
+  ('other-gpu', extensions.crypt('secret-b', extensions.gen_salt('bf')));
 select report_services('home-gpu', 'secret-a', '[{"type":"image","healthy":true},{"type":"tts","healthy":true}]');
 select report_services('other-gpu', 'secret-b', '[{"type":"image","healthy":true}]');
 
@@ -68,7 +68,7 @@ begin
   perform assert(v_job.lease_expires_at > now(), 'claim sets a lease');
 end $$;
 
--- 4. Priority and FIFO ordering -------------------------------------------
+-- 4. Ordinary jobs use FIFO ordering --------------------------------------
 do $$
 declare
   v_lo uuid; v_hi uuid; v_job jobs;
@@ -77,14 +77,15 @@ begin
   insert into jobs (user_id, type, priority, payload)
   values ('11111111-1111-1111-1111-111111111111', 'image', 0, '{}')
   returning id into v_lo;
+  perform pg_sleep(0.01);
   insert into jobs (user_id, type, priority, payload)
   values ('11111111-1111-1111-1111-111111111111', 'image', 10, '{}')
   returning id into v_hi;
 
   v_job := claim_one('home-gpu', 'secret-a');
-  perform assert(v_job.id = v_hi, 'higher priority claimed first');
+  perform assert(v_job.id = v_lo, 'ordinary user jobs remain FIFO');
   v_job := claim_one('home-gpu', 'secret-a');
-  perform assert(v_job.id = v_lo, 'lower priority claimed second');
+  perform assert(v_job.id = v_hi, 'later job is claimed second');
 end $$;
 
 -- 5. Idempotency -----------------------------------------------------------

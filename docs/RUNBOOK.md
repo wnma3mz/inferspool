@@ -31,22 +31,28 @@ inferspool submit tts "请朗读这段话" --voice default --format wav
 
 inferspool status
 inferspool list --status failed --search 租约
-inferspool watch <job-id>
 inferspool cancel <job-id>
-inferspool retry <job-id>
-inferspool keep <job-id>          # 永久保留；--unkeep 恢复默认保留期
+inferspool rerun <job-id>
 inferspool delete <job-id>
 ```
 
-不加 `--wait` 时可创建带签名的完成通知：
+GPU 离线时任务会留在云端排队，上线后自动执行。配置位于系统标准配置目录，脚本也可直接设置 `INFERSPOOL_API_KEY`。
+CLI 和 Web 会区分等待 GPU、等待模型服务和等待空闲容量。图片、视频和语音任务加 `--direct` 后，生成文件会跳过云端 Storage，由在线 Worker 返回局域网临时 URL；任务描述和状态仍通过云端调度。不加时默认使用私有云存储。CLI 所在机器必须能够访问 Worker 上报的地址。
+
+### 高级自动化
+
+下面这些能力保留给脚本、CI 和管理员使用，不属于常规交互流程：
 
 ```bash
+inferspool batch llm prompts.txt --wait
+inferspool watch <job-id>
 inferspool webhook create https://example.com/jobs
 inferspool webhook list
+inferspool submit image "测试" --experimental-json '{"seed":42}'
 ```
 
-GPU 离线时任务会留在云端排队，上线后自动执行。配置位于系统标准配置目录，脚本也可直接设置 `INFERSPOOL_API_KEY`。
-图片、视频和语音任务加 `--direct` 后，会跳过云端 Storage，由支持直传的 Worker 返回局域网临时 URL；不加时默认使用私有云存储。CLI 所在机器必须能够访问 Worker 上报的地址。
+普通任务由服务端按用户公平轮转，不提供手动插队参数。参数通过稳定的 Web/CLI 入口提交；Worker 动态上报自己支持的参数范围。云端结果按管理员配置的固定期限保留，用户可以提前删除。
+`--experimental-json` 仅用于尚未形成稳定 CLI 选项的参数；API 只接受当前 Worker 动态 schema 已声明的字段和取值，不能覆盖 prompt、输入文件或结果传输方式。
 
 ## GPU 提供者
 
@@ -104,8 +110,8 @@ INFERSPOOL_DIRECT_URL=https://gpu.home.example:9090
 INFERSPOOL_DIRECT_TTL_SECS=600
 ```
 
-直传结果只驻留 Worker 内存，通过 256-bit 随机 URL 下载，过期自动删除，不经过
-Supabase Storage。Worker 默认不开启监听；两项配置必须同时存在。`DIRECT_URL`
+直传结果只驻留 Worker 内存，通过 256-bit 随机 URL 下载，过期自动删除，生成文件不经过
+Supabase Storage；任务描述和状态仍经过云端控制平面。Worker 默认不开启监听；两项配置必须同时存在。`DIRECT_URL`
 必须是用户浏览器可达的地址，而且 HTTPS 网页必须使用浏览器信任的 HTTPS
 Worker 地址。直传缓冲区最多 1 GiB；满时任务明确失败，用户可改用 cloud。
 Worker 内置的是 HTTP 服务；HTTPS 页面使用直传时，需要在局域网反向代理上配置

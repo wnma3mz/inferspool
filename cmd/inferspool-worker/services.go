@@ -51,9 +51,17 @@ func parameterSchema(jobType string) map[string]ParameterRange {
 	case "llm":
 		return map[string]ParameterRange{"temperature": number(0, 2), "max_tokens": integer(1, 131072)}
 	case "image":
-		return map[string]ParameterRange{"size": {Type: "string", Pattern: `^[0-9]{2,5}x[0-9]{2,5}$`}, "num_inference_steps": integer(1, 200)}
+		return map[string]ParameterRange{
+			"size": {Type: "string", Pattern: `^[0-9]{2,5}x[0-9]{2,5}$`}, "num_inference_steps": integer(1, 200),
+			"seed": integer(0, 2147483647), "negative_prompt": {Type: "string"},
+			"guidance_scale": number(0, 100), "true_cfg_scale": number(0, 100), "n": integer(1, 8),
+		}
 	case "video":
-		return map[string]ParameterRange{"size": {Type: "string", Pattern: `^[0-9]{2,5}x[0-9]{2,5}$`}, "num_inference_steps": integer(1, 200), "seconds": number(.01, 300), "fps": integer(1, 240)}
+		return map[string]ParameterRange{
+			"size": {Type: "string", Pattern: `^[0-9]{2,5}x[0-9]{2,5}$`}, "num_inference_steps": integer(1, 200),
+			"seconds": number(.01, 300), "fps": integer(1, 240), "seed": integer(0, 2147483647),
+			"negative_prompt": {Type: "string"}, "guidance_scale": number(0, 100), "true_cfg_scale": number(0, 100),
+		}
 	case "tts":
 		return map[string]ParameterRange{"voice": {Type: "string"}, "speed": number(.25, 4), "response_format": {Type: "string", Enum: []string{"wav", "mp3", "flac", "pcm", "opus"}}}
 	default:

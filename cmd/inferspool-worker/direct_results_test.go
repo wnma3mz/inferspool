@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -70,5 +71,20 @@ func TestDirectResultServerExpiredRequestReleasesBuffer(t *testing.T) {
 	}
 	if len(direct.files) != 0 || direct.bytes != 0 {
 		t.Fatalf("expired request retained buffer: files=%d bytes=%d", len(direct.files), direct.bytes)
+	}
+}
+
+func TestDirectResultServerAllowsBrowserRangePreflight(t *testing.T) {
+	direct := &DirectResultServer{files: map[string]directResult{}}
+	request := httptest.NewRequest(http.MethodOptions, "/result/token", nil)
+	request.Header.Set("Access-Control-Request-Headers", "range")
+	response := httptest.NewRecorder()
+	direct.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want %d", response.Code, http.StatusNoContent)
+	}
+	if got := response.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Range") {
+		t.Fatalf("allow headers=%q, want Range", got)
 	}
 }

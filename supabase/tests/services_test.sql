@@ -13,9 +13,9 @@ delete from workers;
 delete from auth.users;
 
 insert into auth.users (id) values (:'alice');
-insert into workers (id, capabilities, token_hash, last_heartbeat) values
-  ('gpu-1', '{}',      extensions.crypt('t1', extensions.gen_salt('bf')), now()),
-  ('gpu-2', '{video}', extensions.crypt('t2', extensions.gen_salt('bf')), now());
+insert into workers (id, token_hash, last_heartbeat) values
+  ('gpu-1', extensions.crypt('t1', extensions.gen_salt('bf')), now()),
+  ('gpu-2', extensions.crypt('t2', extensions.gen_salt('bf')), now());
 
 -- 1. report_services -------------------------------------------------------
 do $$

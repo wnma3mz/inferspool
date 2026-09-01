@@ -43,7 +43,7 @@ func TestPrintResultFiles(t *testing.T) {
 	// Image results carry a file list; print one path per line so the output
 	// pipes into other tools.
 	job := Job{Status: "succeeded", Result: json.RawMessage(
-		`{"files":[{"filename":"a.png","subfolder":""},
+		`{"artifacts":[{"kind":"image","filename":"a.png","subfolder":""},
 		           {"filename":"b.png","subfolder":"sub"}]}`)}
 	out := capture(t, func() { printResult(job) })
 	lines := strings.Fields(strings.TrimSpace(out))
@@ -119,5 +119,22 @@ func TestColorDisabledIsPlain(t *testing.T) {
 	}
 	if strings.Contains(colorStatus("failed"), "\033") {
 		t.Error("status should be plain when color is disabled")
+	}
+}
+
+func TestStageLabelExplainsQueuedJobs(t *testing.T) {
+	tests := map[string]string{
+		"waiting_for_worker":        "waiting for GPU",
+		"waiting_for_service":       "waiting for model service",
+		"waiting_for_capacity":      "waiting for capacity",
+		"waiting_for_direct_worker": "waiting for direct-capable GPU",
+	}
+	for stage, want := range tests {
+		if got := stageLabel(Job{Status: "queued", Stage: stage}); got != want {
+			t.Errorf("stage %s = %q, want %q", stage, got, want)
+		}
+	}
+	if got := stageLabel(Job{Status: "queued"}); got != "queued" {
+		t.Errorf("legacy job stage = %q, want queued", got)
 	}
 }

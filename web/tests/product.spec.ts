@@ -29,6 +29,13 @@ function job(id: string, status: string, prompt: string): any {
     user_id: user.id,
     type: "llm",
     status,
+    stage: status === "queued"
+      ? "waiting_for_capacity"
+      : status === "running"
+      ? "generating"
+      : status === "succeeded"
+      ? "completed"
+      : status,
     priority: 0,
     payload: { prompt },
     result: null,
@@ -44,7 +51,6 @@ function job(id: string, status: string, prompt: string): any {
       ? new Date().toISOString()
       : null,
     source_job_id: null,
-    keep_result: false,
     retained_until: null,
     tags: [],
   };
@@ -178,7 +184,6 @@ async function mockBackend(page: Page, forcePassword = false) {
       force_password_change: true,
       max_active_jobs: 100,
       daily_job_limit: 500,
-      max_priority: 5,
       retention_days: 30,
     },
   };
@@ -218,6 +223,17 @@ async function mockBackend(page: Page, forcePassword = false) {
     );
     await route.fulfill({ status: 200, contentType: "image/png", body: png });
   });
+  await page.route("http://worker.test/**", async (route) => {
+    await route.fulfill({
+      status: 206,
+      headers: {
+        "access-control-allow-origin": "*",
+        "content-range": "bytes 0-0/1",
+      },
+      contentType: "image/png",
+      body: Buffer.from([0]),
+    });
+  });
   await page.route("http://api.test/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -249,7 +265,11 @@ async function mockBackend(page: Page, forcePassword = false) {
         queued: jobs.filter((item) => item.status === "queued").length,
         running: 0,
         workers_online: 1,
-        services: { llm: { up: 1, total: 1, capacity: 1, queued: 0 } },
+        services: {
+          llm: { up: 1, total: 1, capacity: 1, queued: 0 },
+          image: { up: 1, total: 1, capacity: 1, queued: 0 },
+        },
+        direct: { image: 1 },
         workers: [],
       });
     }
@@ -285,17 +305,18 @@ async function mockBackend(page: Page, forcePassword = false) {
       return fulfill(created, 201);
     }
     const jobAction = path.match(
-      /^\/jobs\/([0-9a-f-]+)(?:\/(cancel|retry|keep|result))?$/,
+      /^\/jobs\/([0-9a-f-]+)(?:\/(cancel|rerun|result))?$/,
     );
     if (jobAction) {
       const [, id, action] = jobAction;
       const item = jobs.find((value) => value.id === id);
       if (action === "cancel") {
         item.status = "canceled";
+        item.stage = "canceled";
         item.finished_at = new Date().toISOString();
         return fulfill({ status: "canceled" });
       }
-      if (action === "retry") {
+      if (action === "rerun") {
         const created = job(
           "cccccccc-cccc-cccc-cccc-cccccccccccc",
           "queued",
@@ -304,10 +325,6 @@ async function mockBackend(page: Page, forcePassword = false) {
         created.source_job_id = id;
         jobs.unshift(created);
         return fulfill(created, 201);
-      }
-      if (action === "keep") {
-        item.keep_result = request.postDataJSON().keep;
-        return fulfill({ kept: item.keep_result });
       }
       if (action === "result") {
         return fulfill({
@@ -352,7 +369,7 @@ async function mockBackend(page: Page, forcePassword = false) {
         : [failed];
       return fulfill({ data, next_cursor: null });
     }
-    if (/\/admin\/jobs\/.+\/retry$/.test(path)) {
+    if (/\/admin\/jobs\/.+\/rerun$/.test(path)) {
       return fulfill(
         job("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", "queued", "retry target"),
         201,
@@ -452,14 +469,13 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
   const failedRow = page.locator(".task-row").filter({
     hasText: "retry target",
   });
-  await failedRow.getByRole("button", { name: "重试" }).click();
+  await failedRow.getByRole("button", { name: "再次运行" }).click();
   await expect(page.locator(".task-row").filter({ hasText: "retry target" }))
     .toHaveCount(2);
   const resultRow = page.locator(".task-row").filter({
     hasText: "result target",
   });
-  await resultRow.getByRole("button", { name: "长期保留" }).click();
-  await expect(resultRow.getByRole("button", { name: "取消长期保留" }))
+  await expect(resultRow.getByRole("button", { name: "再次运行" }))
     .toBeVisible();
   await resultRow.getByRole("button", { name: "删除" }).click();
   await expect(page.locator(".task-row").filter({ hasText: "result target" }))
@@ -467,7 +483,7 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
 
   const queuedRow = page.locator(".task-row").filter({
     hasText: "retry target",
-  }).filter({ hasText: "排队中" });
+  }).filter({ hasText: "等待空闲容量" });
   await queuedRow.getByRole("button", { name: "取消", exact: true }).click();
   await expect(
     page.locator(".task-row").filter({ hasText: "retry target" }).filter({
@@ -482,12 +498,86 @@ test("file jobs can request LAN direct delivery", async ({ page }) => {
   await signIn(page);
   await page.getByRole("tab", { name: "图片生成" }).click();
   await page.getByLabel("任务内容").fill("LAN image");
-  await page.getByLabel("结果传输").selectOption("direct");
-  await expect(page.getByText(/结果仅在 Worker 内存短时保留/)).toBeVisible();
+  await page.getByLabel("当前设备临时获取").check();
+  await expect(page.getByText(/生成文件不会上传云端/)).toBeVisible();
   await page.getByRole("button", { name: "提交任务" }).click();
   await expect.poll(() => state.submittedPayload?._result_delivery).toBe(
     "direct",
   );
+});
+
+test("jobs explain waits and temporary result availability", async ({ page }) => {
+  await installRealtimeMock(page);
+  const state = await mockBackend(page);
+  const waiting = job(
+    "12121212-1212-1212-1212-121212121212",
+    "queued",
+    "waiting image",
+  );
+  waiting.type = "image";
+  waiting.stage = "waiting_for_service";
+  const temporary = job(
+    "34343434-3434-3434-3434-343434343434",
+    "succeeded",
+    "temporary image",
+  );
+  temporary.type = "image";
+  temporary.result = {
+    artifacts: [{
+      kind: "image",
+      url: "http://worker.test/result/token",
+      filename: "result.png",
+      mime: "image/png",
+      bytes: 1,
+      delivery: "direct",
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }],
+  };
+  state.jobs.unshift(waiting, temporary);
+  await signIn(page);
+
+  await expect(page.getByText("等待模型服务启动或恢复")).toBeVisible();
+  const temporaryRow = page.locator(".task-row").filter({
+    hasText: "temporary image",
+  });
+  await expect(temporaryRow.getByText(/当前设备临时文件/)).toBeVisible();
+  await expect(temporaryRow.getByRole("button", { name: "再次运行" }))
+    .toBeVisible();
+  await expect(temporaryRow.getByRole("button", { name: "删除" })).toBeVisible();
+
+  await page.getByRole("tab", { name: "图片生成" }).click();
+  await expect(page.getByText("高级设置")).toBeVisible();
+  await expect(page.getByLabel("推理步数")).not.toBeVisible();
+});
+
+test("expired temporary results can be generated again", async ({ page }) => {
+  await installRealtimeMock(page);
+  const state = await mockBackend(page);
+  const temporary = job(
+    "56565656-5656-5656-5656-565656565656",
+    "succeeded",
+    "expired image",
+  );
+  temporary.type = "image";
+  temporary.payload = { prompt: "expired image", _result_delivery: "direct" };
+  temporary.result = {
+    artifacts: [{
+      kind: "image",
+      url: "http://worker.test/result/expired",
+      filename: "result.png",
+      mime: "image/png",
+      bytes: 1,
+      delivery: "direct",
+      expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }],
+  };
+  state.jobs.unshift(temporary);
+  await signIn(page);
+
+  const row = page.locator(".task-row").filter({ hasText: "expired image" });
+  await expect(row.getByText("临时文件已过期")).toBeVisible();
+  await row.getByRole("button", { name: "再次运行" }).click();
+  await expect.poll(() => state.jobs[0]?.source_job_id).toBe(temporary.id);
 });
 
 test("invited account changes password before entering workspace", async ({ page }) => {
@@ -526,7 +616,7 @@ test("API keys and administrator product controls", async ({ page }) => {
   await expect(workerFilter).toContainText("home-4090");
   await workerFilter.selectOption("home-4090");
   await expect.poll(() => state.adminJobWorkerFilter).toBe("home-4090");
-  await admin.getByRole("button", { name: "重试" }).click();
+  await admin.getByRole("button", { name: "再次运行" }).click();
 
   await admin.getByRole("button", { name: "用户", exact: true }).click();
   await admin.getByPlaceholder("user@example.com").fill("invite@example.com");

@@ -67,12 +67,10 @@ func main() {
 		code, err = cmdWatch(args)
 	case "cancel":
 		code, err = cmdCancel(args)
-	case "retry":
-		code, err = cmdRetry(args)
+	case "rerun", "retry":
+		code, err = cmdRerun(args)
 	case "delete":
 		code, err = cmdDelete(args)
-	case "keep":
-		code, err = cmdKeep(args)
 	case "status":
 		code, err = cmdStatus(args)
 	case "config":
@@ -110,20 +108,21 @@ Usage:
   inferspool whoami                    show the signed-in account
   inferspool key create|list|revoke    manage CLI API keys
   inferspool password                  change your account password
-  inferspool webhook create|list|delete manage completion webhooks
   inferspool admin user|worker         administer invited users and GPU workers
   inferspool submit <type> [text]      submit one job (types: image video tts llm)
-  inferspool batch  <type> <file>      submit one job per line ("-" for stdin)
   inferspool list                      list your recent jobs
   inferspool get    <id>               show one job
-  inferspool watch  <id>               follow a job until it finishes
   inferspool cancel <id>               cancel a job
-  inferspool retry  <id>               create a retry linked to a failed job
+  inferspool rerun  <id>               run a completed or failed job again
   inferspool delete <id>               delete a finished job and its files
-  inferspool keep   <id>               keep a result beyond retention
   inferspool status                    show which GPU services are online
   inferspool config set-key <key>      use an existing API key
   inferspool update                    install the latest verified release
+
+Advanced automation:
+  inferspool batch <type> <file>       submit one job per line
+  inferspool watch <id>                follow an existing job
+  inferspool webhook create|list|delete manage completion webhooks
 
 Flags:
   -w, --wait          block until the job finishes (exit 1 if it failed)
@@ -137,9 +136,6 @@ Flags:
       --after <time>  created after RFC3339 time
       --filter-tag <t> filter history by tag
       --cursor <token> continue a paginated list
-      --unkeep        restore default retention
-      --priority <n>  0-10, higher runs first
-      --payload <js>  extra payload fields as JSON
       --voice <name>  voice for text-to-speech (tts)
       --temperature <n> LLM sampling temperature (0-2)
       --max-tokens <n>  LLM output token limit
@@ -155,6 +151,9 @@ Flags:
       --timeout <s>   give up waiting after N seconds
       --tag <name>    resubmit an identical batch file as a new batch
       --key <name>    idempotency key for safe retries
+
+Experimental:
+      --experimental-json <json>  fields advertised by the current Worker only
 
 Examples:
   inferspool login user@example.com
@@ -172,36 +171,34 @@ Examples:
 // flags is a tiny parser: the stdlib FlagSet cannot mix positional arguments
 // with flags in any order, which is what a CLI like this needs.
 type flags struct {
-	wait        bool
-	quiet       bool
-	jsonOut     bool
-	stdin       bool
-	direct      bool
-	limit       int
-	priority    int
-	timeout     int
-	status      string
-	jobType     string
-	search      string
-	before      string
-	after       string
-	filterTag   string
-	cursor      string
-	unkeep      bool
-	payload     string
-	voice       string
-	temperature string
-	maxTokens   string
-	size        string
-	steps       string
-	seconds     string
-	fps         string
-	speed       string
-	format      string
-	images      []string
-	tag         string
-	key         string
-	rest        []string
+	wait             bool
+	quiet            bool
+	jsonOut          bool
+	stdin            bool
+	direct           bool
+	limit            int
+	timeout          int
+	status           string
+	jobType          string
+	search           string
+	before           string
+	after            string
+	filterTag        string
+	cursor           string
+	experimentalJSON string
+	voice            string
+	temperature      string
+	maxTokens        string
+	size             string
+	steps            string
+	seconds          string
+	fps              string
+	speed            string
+	format           string
+	images           []string
+	tag              string
+	key              string
+	rest             []string
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -234,11 +231,6 @@ func parseFlags(args []string) (flags, error) {
 			if v, err = next(); err == nil {
 				_, err = fmt.Sscanf(v, "%d", &f.limit)
 			}
-		case "--priority":
-			var v string
-			if v, err = next(); err == nil {
-				_, err = fmt.Sscanf(v, "%d", &f.priority)
-			}
 		case "--timeout":
 			var v string
 			if v, err = next(); err == nil {
@@ -258,10 +250,8 @@ func parseFlags(args []string) (flags, error) {
 			f.filterTag, err = next()
 		case "--cursor":
 			f.cursor, err = next()
-		case "--unkeep":
-			f.unkeep = true
-		case "--payload":
-			f.payload, err = next()
+		case "--experimental-json":
+			f.experimentalJSON, err = next()
 		case "--voice":
 			f.voice, err = next()
 		case "--temperature":

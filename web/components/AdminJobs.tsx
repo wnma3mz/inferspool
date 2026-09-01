@@ -5,6 +5,7 @@ import { api, jsonBody } from "../lib/api";
 import {
   type Job,
   JOB_TYPE_LABELS,
+  type QueueStats,
   type JobStatus,
   type JobType,
 } from "../lib/types";
@@ -22,7 +23,6 @@ interface AdminUser {
     force_password_change: boolean;
     max_active_jobs: number;
     daily_job_limit: number;
-    max_priority: number;
     retention_days: number;
   };
 }
@@ -174,18 +174,80 @@ export function AdminJobs() {
 
 function Overview({ zh }: { zh: boolean }) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
+  const [stats, setStats] = useState<QueueStats | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
-    void api<Metrics>("/admin/metrics?hours=24").then(setMetrics).catch((e) =>
-      setError(e.message)
-    );
+    void Promise.all([
+      api<Metrics>("/admin/metrics?hours=24"),
+      api<QueueStats>("/status", {}, false),
+    ]).then(([nextMetrics, nextStats]) => {
+      setMetrics(nextMetrics);
+      setStats(nextStats);
+    }).catch((e) => setError(e.message));
   }, []);
   if (error) return <div className="alert alert-error">{error}</div>;
   if (!metrics) {
     return <div className="admin-empty">{zh ? "加载中…" : "Loading…"}</div>;
   }
+  const blocked = Object.entries(stats?.services ?? {}).filter(([, service]) =>
+    service.queued > 0 && service.up === 0
+  );
+  const issues = [
+    ...blocked.map(([type, service]) => ({
+      key: type,
+      title: service.total === 0
+        ? (zh
+          ? `${JOB_TYPE_LABELS[type as JobType]?.[0] ?? type}没有已注册服务`
+          : `No registered ${JOB_TYPE_LABELS[type as JobType]?.[1] ?? type} service`)
+        : (zh
+          ? `${JOB_TYPE_LABELS[type as JobType]?.[0] ?? type}服务当前不可用`
+          : `${JOB_TYPE_LABELS[type as JobType]?.[1] ?? type} service is unavailable`),
+      detail: zh
+        ? `${service.queued} 个任务正在等待，不会消耗执行次数。`
+        : `${service.queued} job(s) are waiting without consuming attempts.`,
+    })),
+    ...(metrics.service_failures > 0
+      ? [{
+        key: "failures",
+        title: zh
+          ? `过去 24 小时发生 ${metrics.service_failures} 次服务异常`
+          : `${metrics.service_failures} service failure(s) in 24 hours`,
+        detail: zh
+          ? "请在 GPU 节点页查看不可用服务及最近错误。"
+          : "Review unavailable services and recent errors on the GPU workers page.",
+      }]
+      : []),
+  ];
   return (
     <>
+      <div className="admin-health">
+        <div className="admin-panel-heading">
+          <strong>{zh ? "当前需要关注" : "Needs attention"}</strong>
+        </div>
+        {issues.length === 0
+          ? (
+            <div className="admin-health-ok">
+              <Icon name="shield" />
+              <div>
+                <strong>{zh ? "当前没有阻塞任务" : "No jobs are blocked"}</strong>
+                <span>
+                  {zh
+                    ? "可用服务能够处理当前队列。"
+                    : "Available services can handle the current queue."}
+                </span>
+              </div>
+            </div>
+          )
+          : issues.map((issue) => (
+            <div className="admin-health-issue" key={issue.key}>
+              <Icon name="queue" />
+              <div>
+                <strong>{issue.title}</strong>
+                <span>{issue.detail}</span>
+              </div>
+            </div>
+          ))}
+      </div>
       <div className="admin-metrics">
         <Metric label={zh ? "排队" : "Queued"} value={metrics.queued} />
         <Metric label={zh ? "运行中" : "Running"} value={metrics.running} />
@@ -316,7 +378,7 @@ function Jobs(
     try {
       await api(
         `/admin/jobs/${job.id}/${
-          terminal.has(job.status) ? "retry" : "cancel"
+          terminal.has(job.status) ? "rerun" : "cancel"
         }`,
         { method: "POST", body: "{}" },
       );
@@ -480,7 +542,7 @@ function Jobs(
                     onClick={() => void act(job)}
                   >
                     {terminal.has(job.status)
-                      ? (zh ? "重试" : "Retry")
+                      ? (zh ? "再次运行" : "Run again")
                       : (zh ? "取消" : "Cancel")}
                   </button>
                 </td>
@@ -561,17 +623,12 @@ function Users(
       String(current?.daily_job_limit ?? 500),
     );
     if (daily == null) return;
-    const priority = window.prompt(
-      zh ? "允许使用的最高优先级（0-10）" : "Maximum allowed priority (0-10)",
-      String(current?.max_priority ?? 5),
-    );
-    if (priority == null) return;
     const retention = window.prompt(
       zh ? "结果默认保留天数" : "Default result retention in days",
       String(current?.retention_days ?? 30),
     );
     if (retention == null) return;
-    const values = [active, daily, priority, retention].map(Number);
+    const values = [active, daily, retention].map(Number);
     if (values.some((value) => !Number.isInteger(value))) {
       setError(zh ? "配额必须是整数。" : "Quota values must be integers.");
       return;
@@ -582,8 +639,7 @@ function Users(
         body: jsonBody({
           max_active_jobs: values[0],
           daily_job_limit: values[1],
-          max_priority: values[2],
-          retention_days: values[3],
+          retention_days: values[2],
         }),
       });
       await refresh();
@@ -631,7 +687,7 @@ function Users(
               <th>{zh ? "状态" : "Status"}</th>
               <th>{zh ? "同时任务 / 每日额度" : "Concurrent / daily limit"}</th>
               <th>
-                {zh ? "最高优先级 / 保留天数" : "Max priority / retention"}
+                {zh ? "结果保留" : "Result retention"}
               </th>
               <th>{zh ? "最近登录" : "Last sign-in"}</th>
               <th />
@@ -657,7 +713,6 @@ function Users(
                   {user.profile?.daily_job_limit ?? 500}
                 </td>
                 <td>
-                  {user.profile?.max_priority ?? 5} /{" "}
                   {user.profile?.retention_days ?? 30}d
                 </td>
                 <td>

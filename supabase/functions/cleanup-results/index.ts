@@ -113,7 +113,7 @@ Deno.serve(async (request) => {
   const { data: jobs, error } = await service.from("jobs").select(
     "id,user_id,payload,result",
   ).is("deleted_at", null).in("status", ["succeeded", "failed", "canceled"]).or(
-    `deletion_requested_at.not.is.null,and(keep_result.eq.false,retained_until.lte.${now})`,
+    `deletion_requested_at.not.is.null,retained_until.lte.${now}`,
   ).limit(100);
   if (error) return json({ error: error.message }, 500);
   let removed = 0;

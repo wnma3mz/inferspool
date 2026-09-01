@@ -19,7 +19,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
       - name: Validate version
@@ -37,11 +37,11 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "number=${TAG#v}" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: cmd/inferspool-worker/go.mod
           cache: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v7
@@ -76,7 +76,7 @@ jobs:
       - name: Sign checksum manifest
         run: cosign sign-blob --yes --bundle release/SHA256SUMS.bundle release/SHA256SUMS
       - name: Save Homebrew Formula for the tap job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: homebrew-formula
           path: release/inferspool.rb
@@ -95,12 +95,12 @@ jobs:
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: test -n "$TAP_TOKEN" || { echo "Add the HOMEBREW_TAP_TOKEN repository secret with Contents write access to wnma3mz/homebrew-tap" >&2; exit 1; }
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           repository: wnma3mz/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: homebrew-formula
           path: formula-artifact

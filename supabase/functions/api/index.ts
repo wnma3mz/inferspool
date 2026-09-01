@@ -218,6 +218,122 @@ function isJobType(value: unknown): value is "llm" | "image" | "video" | "tts" {
   return ["llm", "image", "video", "tts"].includes(String(value));
 }
 
+function artifactKind(mime: unknown) {
+  const value = String(mime ?? "");
+  if (value.startsWith("image/")) return "image";
+  if (value.startsWith("audio/")) return "audio";
+  if (value.startsWith("video/")) return "video";
+  return "file";
+}
+
+function normalizeResult(value: any) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (Array.isArray(value.artifacts)) return value;
+  const legacy = [
+    ...(Array.isArray(value.files) ? value.files : []),
+    ...(value.file && typeof value.file === "object" ? [value.file] : []),
+  ];
+  if (!legacy.length) return value;
+  const { file: _file, files: _files, type: _type, ...rest } = value;
+  return {
+    ...rest,
+    artifacts: legacy.map((item: any) => ({
+      ...item,
+      kind: item.kind === "images"
+        ? "image"
+        : (item.kind ?? artifactKind(item.mime)),
+    })),
+  };
+}
+
+type JobStage =
+  | "waiting_for_worker"
+  | "waiting_for_service"
+  | "waiting_for_capacity"
+  | "waiting_for_direct_worker"
+  | "assigned"
+  | "generating"
+  | "encoding"
+  | "delivering"
+  | "completed"
+  | "failed"
+  | "canceled";
+
+type ServiceAvailability = Record<
+  string,
+  { registered: number; online: number; healthy: number; direct: number }
+>;
+
+async function serviceAvailability(): Promise<ServiceAvailability> {
+  const { data, error } = await service.from("worker_services").select(
+    "type,healthy,last_check,parameter_schema,workers!inner(last_heartbeat,disabled_at)",
+  ).is("workers.disabled_at", null);
+  if (error) throw error;
+  const cutoff = Date.now() - 90_000;
+  const result: ServiceAvailability = {};
+  for (const row of data ?? []) {
+    const type = String(row.type);
+    const current = result[type] ?? {
+      registered: 0,
+      online: 0,
+      healthy: 0,
+      direct: 0,
+    };
+    current.registered++;
+    const worker = Array.isArray(row.workers) ? row.workers[0] : row.workers;
+    const fresh = Date.parse(String(row.last_check)) > cutoff &&
+      Date.parse(String(worker?.last_heartbeat)) > cutoff;
+    if (fresh) current.online++;
+    if (fresh && row.healthy) current.healthy++;
+    if (
+      fresh && row.parameter_schema?._result_delivery?.enum?.includes("direct")
+    ) current.direct++;
+    result[type] = current;
+  }
+  return result;
+}
+
+function jobStage(job: any, services: ServiceAvailability): JobStage {
+  if (job.status === "succeeded") return "completed";
+  if (job.status === "failed") return "failed";
+  if (job.status === "canceled") return "canceled";
+  if (job.status === "running") {
+    const progress = String(job.progress_msg ?? "").toLowerCase();
+    if (progress.includes("encod") || progress.includes("compress")) {
+      return "encoding";
+    }
+    if (progress.includes("upload") || progress.includes("deliver")) {
+      return "delivering";
+    }
+    return job.progress == null ? "assigned" : "generating";
+  }
+  const available = services[String(job.type)] ?? {
+    registered: 0,
+    online: 0,
+    healthy: 0,
+    direct: 0,
+  };
+  if (job.payload?._result_delivery === "direct" && available.direct === 0) {
+    return "waiting_for_direct_worker";
+  }
+  if (available.registered === 0 || available.online === 0) {
+    return "waiting_for_worker";
+  }
+  if (available.healthy === 0) return "waiting_for_service";
+  return "waiting_for_capacity";
+}
+
+function explainJobs(rows: any[], services: ServiceAvailability) {
+  return rows.map((row) => {
+    const { priority: _priority, ...visible } = row;
+    return {
+      ...visible,
+      result: normalizeResult(row.result),
+      stage: jobStage(row, services),
+    };
+  });
+}
+
 function validateProductPayload(
   type: string,
   payload: Record<string, any>,
@@ -259,11 +375,17 @@ function validateProductPayload(
   }
 }
 
-const stableParameters: Record<string, string[]> = {
-  llm: ["temperature", "max_tokens"],
-  image: ["size", "num_inference_steps"],
-  video: ["size", "num_inference_steps", "seconds", "fps"],
-  tts: ["voice", "speed", "response_format"],
+const payloadFields: Record<string, Set<string>> = {
+  llm: new Set(["prompt", "images", "temperature", "max_tokens"]),
+  image: new Set(["prompt", "size", "num_inference_steps"]),
+  video: new Set([
+    "prompt",
+    "size",
+    "num_inference_steps",
+    "seconds",
+    "fps",
+  ]),
+  tts: new Set(["text", "voice", "speed", "response_format"]),
 };
 
 function parameterAccepted(value: unknown, range: any) {
@@ -293,32 +415,39 @@ async function validateWorkerParameters(
   payload: Record<string, any>,
 ) {
   if (payload._result_delivery === "direct") {
-    const { data: directRows, error: directError } = await service.from(
-      "worker_services",
-    ).select("parameter_schema,workers!inner(disabled_at)").eq("type", type)
-      .is("workers.disabled_at", null);
-    if (directError) throw directError;
-    const supported = directRows?.some((row: any) =>
-      row.parameter_schema?._result_delivery?.enum?.includes("direct")
-    );
-    if (!supported) {
+    const availability = await serviceAvailability();
+    if ((availability[type]?.direct ?? 0) === 0) {
       throw Object.assign(
-        new Error("no registered worker supports direct result delivery"),
+        new Error("no online worker supports temporary direct delivery"),
         { status: 422, code: "direct_delivery_unavailable" },
       );
     }
   }
-  const supplied = (stableParameters[type] ?? []).filter((name) =>
-    payload[name] !== undefined
+  const supplied = Object.keys(payload).filter((name) =>
+    !["prompt", "text", "images", "_result_delivery"].includes(name)
   );
-  if (!supplied.length) return;
+  const experimental = supplied.filter((name) =>
+    !payloadFields[type]?.has(name)
+  );
   const { data, error } = await service.from("worker_services")
     .select("parameter_schema,workers!inner(disabled_at)")
     .eq("type", type).is("workers.disabled_at", null);
   if (error) throw error;
   // No registered service is not an input error: shared GPUs may be added or
   // currently asleep while a valid job waits in the durable queue.
-  if (!data?.length) return;
+  if (!data?.length) {
+    if (experimental.length) {
+      throw Object.assign(
+        new Error(
+          `experimental parameters require a registered service: ${
+            experimental.join(", ")
+          }`,
+        ),
+        { status: 422, code: "unsupported_parameters" },
+      );
+    }
+    return;
+  }
   const compatible = data.some((row: any) =>
     supplied.every((name) =>
       parameterAccepted(payload[name], row.parameter_schema?.[name])
@@ -330,6 +459,28 @@ async function validateWorkerParameters(
       { status: 422, code: "unsupported_parameters" },
     );
   }
+}
+
+async function rerunJob(userId: string, id: string) {
+  const { data: oldJob, error: readError } = await service.from("jobs")
+    .select("type,payload,pool_id,tags").eq("id", id).eq("user_id", userId)
+    .in("status", ["succeeded", "failed", "canceled"]).is("deleted_at", null)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (!oldJob) return null;
+  await validateWorkerParameters(oldJob.type, oldJob.payload);
+  const { data, error } = await service.from("jobs").insert({
+    user_id: userId,
+    type: oldJob.type,
+    payload: oldJob.payload,
+    priority: 0,
+    source_job_id: id,
+    pool_id: oldJob.pool_id,
+    tags: oldJob.tags,
+  }).select().single();
+  if (error?.code === "23505") return null;
+  if (error) throw error;
+  return data;
 }
 
 async function sessionRoute(request: Request, path: string) {
@@ -472,7 +623,19 @@ async function accountRoutes(request: Request, path: string) {
 
 async function jobRoutes(request: Request, url: URL, path: string) {
   if (path === "/v1/status" && request.method === "GET") {
-    return json(await rpc(service, "queue_stats"));
+    const [stats, availability] = await Promise.all([
+      rpc(service, "queue_stats"),
+      serviceAvailability(),
+    ]);
+    return json({
+      ...stats,
+      direct: Object.fromEntries(
+        Object.entries(availability).map(([type, value]) => [
+          type,
+          value.direct,
+        ]),
+      ),
+    });
   }
   if (path === "/v1/jobs" && request.method === "POST") {
     const a = await actor(request);
@@ -489,7 +652,7 @@ async function jobRoutes(request: Request, url: URL, path: string) {
         p_key: a.apiKey,
         p_type: input.type,
         p_payload: input.payload,
-        p_priority: input.priority ?? 0,
+        p_priority: a.admin ? (input.priority ?? 0) : 0,
         p_idempotency_key: input.idempotency_key ?? null,
       });
     } else {
@@ -497,14 +660,15 @@ async function jobRoutes(request: Request, url: URL, path: string) {
         user_id: a.userId,
         type: input.type,
         payload: input.payload,
-        priority: input.priority ?? 0,
+        priority: a.admin ? (input.priority ?? 0) : 0,
         idempotency_key: input.idempotency_key ?? null,
         tags: Array.isArray(input.tags) ? input.tags : [],
       }).select().single();
       if (error) throw error;
       job = data;
     }
-    return json(job, 201);
+    const services = await serviceAvailability();
+    return json(explainJobs([job], services)[0], 201);
   }
   if (path === "/v1/jobs" && request.method === "GET") {
     const a = await actor(request);
@@ -573,7 +737,6 @@ async function jobRoutes(request: Request, url: URL, path: string) {
         "id",
         "type",
         "status",
-        "priority",
         "created_at",
         "started_at",
         "finished_at",
@@ -599,15 +762,16 @@ async function jobRoutes(request: Request, url: URL, path: string) {
     const rows = data ?? [];
     const more = rows.length > limit;
     if (more) rows.pop();
+    const services = await serviceAvailability();
     return json({
-      data: rows,
+      data: explainJobs(rows, services),
       next_cursor: more && rows.length
         ? encodeCursor(rows[rows.length - 1]!)
         : null,
     });
   }
   const match = path.match(
-    /^\/v1\/jobs\/([0-9a-f-]+)(?:\/(cancel|retry|keep|result))?$/i,
+    /^\/v1\/jobs\/([0-9a-f-]+)(?:\/(cancel|rerun|retry|result))?$/i,
   );
   if (!match) return null;
   const a = await actor(request);
@@ -617,7 +781,9 @@ async function jobRoutes(request: Request, url: URL, path: string) {
     const { data, error } = await service.from("jobs").select("*").eq("id", id)
       .eq("user_id", a.userId).is("deleted_at", null).maybeSingle();
     if (error) throw error;
-    return data ? json(data) : problem(404, "not_found", "job not found");
+    if (!data) return problem(404, "not_found", "job not found");
+    const services = await serviceAvailability();
+    return json(explainJobs([data], services)[0]);
   }
   if (action === "cancel" && request.method === "POST") {
     let result;
@@ -633,30 +799,17 @@ async function jobRoutes(request: Request, url: URL, path: string) {
       ? problem(409, "not_cancelable", "job not found or already finished")
       : json({ status: result });
   }
-  if (action === "retry" && request.method === "POST") {
-    const result = a.apiKey
-      ? await rpc(service, "retry_job_by_key", {
-        p_key: a.apiKey,
-        p_job_id: id,
-      })
-      : await rpc(userClient(a.jwt!), "retry_job", { p_job_id: id });
-    return result ? json(result, 201) : problem(
-      409,
-      "not_retryable",
-      "job cannot be retried or already has an active retry",
-    );
-  }
-  if (action === "keep" && request.method === "POST") {
-    const input = await body(request);
-    const keep = input.keep !== false;
-    const { data, error } = await service.from("jobs").update({
-      keep_result: keep,
-    }).eq("id", id).eq("user_id", a.userId).is("deleted_at", null).select("id")
-      .maybeSingle();
-    if (error) throw error;
-    return data
-      ? json({ kept: keep })
-      : problem(404, "not_found", "job not found");
+  if (["rerun", "retry"].includes(action ?? "") && request.method === "POST") {
+    const result = await rerunJob(a.userId, id);
+    if (!result) {
+      return problem(
+        409,
+        "not_rerunnable",
+        "job cannot be run again or already has an active rerun",
+      );
+    }
+    const services = await serviceAvailability();
+    return json(explainJobs([result], services)[0], 201);
   }
   if (!action && request.method === "DELETE") {
     const { data, error } = await service.from("jobs").update({
@@ -796,7 +949,11 @@ async function workerRoutes(request: Request, path: string) {
   if (route[path] && request.method === "POST") {
     const [name, mapping] = route[path];
     for (const [from, to] of Object.entries(mapping)) {
-      if (input[from] !== undefined) params[to] = input[from];
+      if (input[from] !== undefined) {
+        params[to] = path === "/v1/workers/complete" && from === "result"
+          ? normalizeResult(input[from])
+          : input[from];
+      }
     }
     return json(await rpc(service, name, params));
   }
@@ -979,15 +1136,16 @@ async function adminRoutes(request: Request, path: string) {
     const rows = data ?? [];
     const more = rows.length > limit;
     if (more) rows.pop();
+    const services = await serviceAvailability();
     return json({
-      data: rows,
+      data: explainJobs(rows, services),
       next_cursor: more && rows.length
         ? encodeCursor(rows[rows.length - 1]!)
         : null,
     });
   }
   const adminJobMatch = path.match(
-    /^\/v1\/admin\/jobs\/([0-9a-f-]+)\/(cancel|retry)$/i,
+    /^\/v1\/admin\/jobs\/([0-9a-f-]+)\/(cancel|rerun|retry)$/i,
   );
   if (adminJobMatch && request.method === "POST") {
     const [, id, action] = adminJobMatch;
@@ -1007,19 +1165,15 @@ async function adminRoutes(request: Request, path: string) {
         ? json({ status: "running" })
         : problem(409, "not_cancelable", "job is already finished");
     }
-    if (!a.jwt) {
-      return problem(
-        400,
-        "session_required",
-        "administrator operations require a login session",
-      );
+    const { data: oldJob, error: ownerError } = await service.from("jobs")
+      .select("user_id").eq("id", id).maybeSingle();
+    if (ownerError) throw ownerError;
+    const rerun = oldJob ? await rerunJob(oldJob.user_id, id) : null;
+    if (!rerun) {
+      return problem(409, "not_rerunnable", "job cannot be run again");
     }
-    const retried = await rpc(userClient(a.jwt), "admin_retry_job", {
-      p_job_id: id,
-    });
-    return retried
-      ? json(retried, 201)
-      : problem(409, "not_retryable", "job cannot be retried");
+    const services = await serviceAvailability();
+    return json(explainJobs([rerun], services)[0], 201);
   }
   if (path === "/v1/admin/users" && request.method === "GET") {
     const page = Math.max(
@@ -1070,7 +1224,6 @@ async function adminRoutes(request: Request, path: string) {
       force_password_change: true,
       max_active_jobs: input.max_active_jobs ?? 100,
       daily_job_limit: input.daily_job_limit ?? 500,
-      max_priority: input.max_priority ?? 5,
       retention_days: input.retention_days ?? 30,
     });
     return json({
@@ -1158,7 +1311,6 @@ async function adminRoutes(request: Request, path: string) {
       const key of [
         "max_active_jobs",
         "daily_job_limit",
-        "max_priority",
         "retention_days",
       ]
     ) if (Number.isInteger(input[key])) update[key] = input[key];
@@ -1185,7 +1337,6 @@ async function adminRoutes(request: Request, path: string) {
     const created = await rpc(adminClient, "admin_create_worker", {
       p_id: input.id,
       p_name: input.name ?? input.id,
-      p_types: [],
       p_pool_id: input.pool_id ?? "00000000-0000-0000-0000-000000000001",
     });
     const requestURL = request.url;

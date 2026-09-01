@@ -31,9 +31,9 @@ jobs:
       INFERSPOOL_TEST_DB: inferspool_test
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.12"
 
@@ -41,18 +41,18 @@ jobs:
         with:
           version: "0.9.18"
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
           # CLI and worker intentionally use the same Go version.
           go-version-file: cmd/inferspool-worker/go.mod
           # The CLI is stdlib-only, so there is no go.sum to key a cache on.
           cache: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6.0.10
         with:
           version: 10
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.0.0
         with:
           node-version: "22"
           cache: pnpm
@@ -81,8 +81,8 @@ jobs:
   build-binaries:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: cmd/inferspool-worker/go.mod
           cache: false
@@ -94,7 +94,7 @@ jobs:
           (cd cmd/inferspool && ./build.sh "ci-$(git rev-parse --short HEAD)")
           (cd cmd/inferspool-worker && ./build.sh "ci-$(git rev-parse --short HEAD)")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: inferspool-binaries
           path: |

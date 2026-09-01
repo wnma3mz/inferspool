@@ -18,21 +18,21 @@ delete from auth.users;
 insert into auth.users(id,email) values
   (:'alice','alice@example.com'),(:'bob','bob@example.com');
 
--- 1. Product parameters, quota, priority and retention defaults ------------
+-- 1. Product parameters, quota, fair priority and retention defaults --------
 do $$
 declare first_job jobs;
 begin
-  update user_profiles set max_active_jobs=1,daily_job_limit=2,max_priority=3,retention_days=7
+  update user_profiles set max_active_jobs=1,daily_job_limit=2,retention_days=7
   where user_id='11111111-1111-1111-1111-111111111111';
   if not found then
-    insert into user_profiles(user_id,max_active_jobs,daily_job_limit,max_priority,retention_days)
-    values('11111111-1111-1111-1111-111111111111',1,2,3,7);
+    insert into user_profiles(user_id,max_active_jobs,daily_job_limit,retention_days)
+    values('11111111-1111-1111-1111-111111111111',1,2,7);
   end if;
 
   insert into jobs(user_id,type,payload,priority)
   values('11111111-1111-1111-1111-111111111111','llm','{"prompt":"one","temperature":0.3,"max_tokens":2048}',10)
   returning * into first_job;
-  perform assert(first_job.priority=3,'ordinary user priority is capped by profile');
+  perform assert(first_job.priority=0,'ordinary user priority is always fair');
   perform assert(first_job.retained_until between now()+interval '6 days 23 hours' and now()+interval '7 days 1 hour',
                  'profile retention is applied at submission');
 
@@ -71,25 +71,22 @@ begin
   perform assert(duplicate.id is null,'a source job cannot have two active retries');
 end $$;
 
--- 3. Keep and deletion requests are owner-scoped ---------------------------
+-- 3. Deletion requests are owner-scoped ------------------------------------
 do $$
 declare target uuid;
 begin
   select id into target from jobs
   where user_id='11111111-1111-1111-1111-111111111111' and status='failed' limit 1;
   perform set_config('request.jwt.claim.sub','22222222-2222-2222-2222-222222222222',false);
-  perform assert(not set_job_retention(target,true),'another user cannot keep a result');
   perform assert(not request_job_deletion(target),'another user cannot delete a result');
   perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111',false);
-  perform assert(set_job_retention(target,true),'owner can keep a result');
-  perform assert((select keep_result from jobs where id=target),'keep flag is persisted');
   perform assert(request_job_deletion(target),'owner can request terminal result deletion');
   perform assert((select deletion_requested_at is not null from jobs where id=target),'deletion request is persisted');
 end $$;
 
 -- 4. Worker parameter declarations and lifecycle events --------------------
-insert into workers(id,capabilities,token_hash)
-values('gpu-product','{llm,image}',extensions.crypt('worker-token',extensions.gen_salt('bf')));
+insert into workers(id,token_hash)
+values('gpu-product',extensions.crypt('worker-token',extensions.gen_salt('bf')));
 
 do $$
 declare target uuid;
@@ -161,11 +158,11 @@ declare created jsonb; rotated text; old_token text;
 begin
   insert into admins(user_id) values('11111111-1111-1111-1111-111111111111') on conflict do nothing;
   perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111',false);
-  created:=admin_create_worker('admin-gpu','Admin GPU','{}');
+  created:=admin_create_worker('admin-gpu','Admin GPU');
   old_token:=created->>'token';
   perform assert(length(old_token)>20,'worker creation returns a one-time token');
-  perform assert((select capabilities='{}' from workers where id='admin-gpu'),
-                 'worker creation does not require static capabilities');
+  perform assert((select count(*)=0 from worker_services where worker_id='admin-gpu'),
+                 'worker creation waits for dynamic service reports');
   perform assert((select token_hash<>old_token and token_hash=extensions.crypt(old_token,token_hash) from workers where id='admin-gpu'),
                  'worker stores only a bcrypt token hash');
   rotated:=admin_rotate_worker_token('admin-gpu');
@@ -227,7 +224,7 @@ begin
   perform assert(claimed_users=2,'first batch gives each waiting user a turn');
 end $$;
 
--- 8. Admin storage metric includes plural and single-file result shapes ----
+-- 8. Admin storage metric includes canonical artifacts ---------------------
 do $$
 declare metrics jsonb;
 begin
@@ -236,12 +233,12 @@ begin
     ('11111111-1111-1111-1111-111111111111','image','{"prompt":"image"}'),
     ('22222222-2222-2222-2222-222222222222','tts','{"text":"speech"}');
   update jobs set status='succeeded',finished_at=now(),result=
-    case when type='image' then '{"files":[{"bytes":10},{"bytes":20}]}'::jsonb
-         else '{"file":{"bytes":30}}'::jsonb end;
+    case when type='image' then '{"artifacts":[{"bytes":10},{"bytes":20}]}'::jsonb
+         else '{"artifacts":[{"bytes":30}]}'::jsonb end;
   insert into admins(user_id) values('11111111-1111-1111-1111-111111111111') on conflict do nothing;
   perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111',false);
   metrics:=admin_metrics(24);
-  perform assert((metrics->>'storage_bytes')::int=60,'storage metric includes file and files result shapes');
+  perform assert((metrics->>'storage_bytes')::int=60,'storage metric includes artifacts');
 end $$;
 
 select 'All product foundation tests passed.' as result;

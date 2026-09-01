@@ -1059,12 +1059,26 @@ input:focus, textarea:focus, select:focus {
 .prompt-box textarea:focus {
   box-shadow: none;
 }
+.advanced-settings {
+  border-top: 1px solid var(--border);
+  background: var(--slate-50);
+}
+.advanced-settings summary {
+  width: fit-content;
+  padding: 9px 12px;
+  cursor: pointer;
+  color: var(--slate-500);
+  font-size: 10px;
+  font-weight: 600;
+}
+.advanced-settings .parameter-grid {
+  border-top: 1px solid var(--border);
+}
 .parameter-grid {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
-  border-top: 1px solid var(--border);
   background: var(--slate-50);
 }
 .parameter-grid label {
@@ -1144,6 +1158,65 @@ input:focus, textarea:focus, select:focus {
 .prompt-actions > span {
   color: var(--slate-400);
   font-size: 10px;
+}
+.delivery-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid var(--border);
+  background: var(--white);
+}
+.delivery-choice legend {
+  padding: 0 4px;
+  color: var(--slate-500);
+  font-size: 10px;
+  font-weight: 600;
+}
+.delivery-choice label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--slate-50);
+}
+.delivery-choice label:has(input:checked) {
+  border-color: var(--blue-300);
+  background: var(--blue-50);
+}
+.delivery-choice label.disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+.delivery-choice input {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+}
+.delivery-choice span {
+  display: grid;
+  gap: 2px;
+}
+.delivery-choice strong {
+  color: var(--slate-700);
+  font-size: 11px;
+}
+.delivery-choice small,
+.delivery-privacy-note {
+  color: var(--slate-500);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.delivery-privacy-note {
+  display: block;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--amber-50);
 }
 .prompt-tools {
   display: flex;
@@ -1400,6 +1473,29 @@ kbd {
   font-size: 10px;
   word-break: break-word;
 }
+.result-unavailable {
+  display: grid;
+  gap: 3px;
+  max-width: 530px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  color: var(--amber-700);
+  background: var(--amber-50);
+  border: 1px solid var(--amber-100);
+  border-radius: 7px;
+  font-size: 10px;
+}
+.result-unavailable span {
+  color: var(--slate-600);
+}
+.result-unavailable .task-action {
+  width: fit-content;
+  margin-top: 4px;
+  padding: 5px 8px;
+  background: var(--white);
+  border: 1px solid var(--amber-100);
+  border-radius: 6px;
+}
 .result-text {
   max-height: 180px;
   margin: 10px 0 0;
@@ -1631,6 +1727,49 @@ kbd {
   grid-template-columns: repeat(4, 1fr);
   gap: 11px;
   padding: 18px 21px;
+}
+.admin-health {
+  border-bottom: 1px solid var(--border);
+}
+.admin-health .admin-panel-heading {
+  border-top: 0;
+}
+.admin-health-ok,
+.admin-health-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 21px;
+  padding: 12px 14px;
+  border: 1px solid var(--green-100);
+  border-radius: 8px;
+  color: var(--green-700);
+  background: var(--green-50);
+}
+.admin-health-issue {
+  border-color: var(--amber-100);
+  color: var(--amber-700);
+  background: var(--amber-50);
+}
+.admin-health-ok .icon,
+.admin-health-issue .icon {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+.admin-health-ok div,
+.admin-health-issue div {
+  display: grid;
+  gap: 3px;
+}
+.admin-health-ok strong,
+.admin-health-issue strong {
+  font-size: 11px;
+}
+.admin-health-ok span,
+.admin-health-issue span {
+  color: var(--slate-600);
+  font-size: 10px;
 }
 .admin-metrics > div {
   display: grid;
@@ -2554,6 +2693,9 @@ kbd {
   .workspace {
     width: calc(100% - 24px);
     padding: 24px 0 40px;
+  }
+  .delivery-choice {
+    grid-template-columns: 1fr;
   }
   .admin-workspace {
     width: calc(100% - 24px);

@@ -3,7 +3,12 @@
 import { useEffect, useState } from "react";
 import { Icon } from "./Icons";
 import { usePreferences } from "./Preferences";
-import { submitJob, uploadInputImage, useSubmitting } from "../lib/useJobs";
+import {
+  submitJob,
+  uploadInputImage,
+  useQueueStats,
+  useSubmitting,
+} from "../lib/useJobs";
 import { JOB_TYPE_LABELS, type JobType } from "../lib/types";
 
 const TYPES: { value: JobType; label: [string, string]; icon: string }[] = [
@@ -44,11 +49,17 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
   const [fps, setFps] = useState("24");
   const [voice, setVoice] = useState("default");
   const [speed, setSpeed] = useState("1");
-	const [format, setFormat] = useState("opus");
-	const [delivery, setDelivery] = useState<"cloud" | "direct">("cloud");
+  const [format, setFormat] = useState("opus");
+  const [delivery, setDelivery] = useState<"cloud" | "direct">("cloud");
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
+  const stats = useQueueStats();
   const { run } = useSubmitting();
+  const directAvailable = type !== "llm" && (stats?.direct?.[type] ?? 0) > 0;
+
+  useEffect(() => {
+    if (type === "llm" || !directAvailable) setDelivery("cloud");
+  }, [type, directAvailable]);
 
   const submit = () =>
     void run(async () => {
@@ -80,7 +91,7 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
         if (type === "llm" && images.length > 0) {
           payload.images = await Promise.all(images.map(uploadInputImage));
         }
-		await submitJob(type, payload, delivery);
+        await submitJob(type, payload, delivery);
         setText("");
         setImages([]);
         setSubmitted(true);
@@ -164,7 +175,9 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
             ) submit();
           }}
         />
-        <div className="parameter-grid">
+        <details className="advanced-settings">
+          <summary>{zh ? "高级设置" : "Advanced settings"}</summary>
+          <div className="parameter-grid">
           {type === "llm" && (
             <>
               <Parameter
@@ -254,27 +267,53 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
               </label>
             </>
           )}
-        </div>
-		<div className="prompt-actions">
-		  <span className="prompt-tools">
-			{type !== "llm" && (
-			  <label>
-				<span>{zh ? "结果传输" : "Result delivery"}</span>
-				<select
-				  aria-label={zh ? "结果传输" : "Result delivery"}
-				  value={delivery}
-				  onChange={(event) =>
-					setDelivery(event.target.value as "cloud" | "direct")}
-				>
-				  <option value="cloud">
-					{zh ? "私有云存储" : "Private cloud storage"}
-				  </option>
-				  <option value="direct">
-					{zh ? "局域网直传" : "LAN direct"}
-				  </option>
-				</select>
-			  </label>
-			)}
+          </div>
+        </details>
+        {type !== "llm" && (
+          <fieldset className="delivery-choice">
+            <legend>{zh ? "结果保存" : "Result availability"}</legend>
+            <label>
+              <input
+                type="radio"
+                name="delivery"
+                value="cloud"
+                checked={delivery === "cloud"}
+                onChange={() => setDelivery("cloud")}
+              />
+              <span>
+                <strong>{zh ? "云端保存" : "Save in cloud"}</strong>
+                <small>
+                  {zh ? "可稍后或跨网络下载" : "Download later or from another network"}
+                </small>
+              </span>
+            </label>
+            <label className={!directAvailable ? "disabled" : ""}>
+              <input
+                type="radio"
+                name="delivery"
+                value="direct"
+                aria-label={zh ? "当前设备临时获取" : "Temporary on this device"}
+                checked={delivery === "direct"}
+                disabled={!directAvailable}
+                onChange={() => setDelivery("direct")}
+              />
+              <span>
+                <strong>{zh ? "当前设备临时获取" : "Temporary on this device"}</strong>
+                <small>
+                  {directAvailable
+                    ? (zh
+                      ? "生成文件不上传云端，需与 GPU 网络互通"
+                      : "Generated files skip cloud storage; this device must reach the GPU")
+                    : (zh
+                      ? "当前没有支持临时获取的 GPU"
+                      : "No compatible GPU is available")}
+                </small>
+              </span>
+            </label>
+          </fieldset>
+        )}
+        <div className="prompt-actions">
+          <span className="prompt-tools">
             {type === "llm" && (
               <label className="attach-button">
                 <Icon name="image" /> {zh ? "添加图片" : "Add images"}
@@ -314,14 +353,14 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
           >
             <Icon name="send" /> {zh ? "提交任务" : "Submit task"}
           </button>
-		</div>
-		{type !== "llm" && delivery === "direct" && (
-		  <small className="field-hint">
-			{zh
-			  ? "浏览器必须能访问 Worker；结果仅在 Worker 内存短时保留。HTTPS 页面需要可信的 HTTPS 直连地址。"
-			  : "Your browser must reach the Worker. Results stay briefly in Worker memory; HTTPS pages require a trusted HTTPS direct URL."}
-		  </small>
-		)}
+        </div>
+        {type !== "llm" && delivery === "direct" && (
+          <small className="field-hint delivery-privacy-note">
+            {zh
+              ? "任务描述仍通过云端调度；生成文件不会上传云端。请保持当前页面在线并及时下载。"
+              : "The job description still uses cloud scheduling; generated files are not uploaded. Keep this page open and download promptly."}
+          </small>
+        )}
       </div>
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {submitted && (

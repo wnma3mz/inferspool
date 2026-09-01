@@ -240,8 +240,8 @@ export async function cancelJob(jobId: string) {
   });
 }
 
-export async function retryJob(jobId: string) {
-  return api<Job>(`/jobs/${encodeURIComponent(jobId)}/retry`, {
+export async function rerunJob(jobId: string) {
+  return api<Job>(`/jobs/${encodeURIComponent(jobId)}/rerun`, {
     method: "POST",
     body: "{}",
   });
@@ -249,13 +249,6 @@ export async function retryJob(jobId: string) {
 
 export async function deleteJob(jobId: string) {
   await api(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
-}
-
-export async function keepJob(jobId: string, keep: boolean) {
-  await api(`/jobs/${encodeURIComponent(jobId)}/keep`, {
-    method: "POST",
-    body: jsonBody({ keep }),
-  });
 }
 
 export async function signedResultUrl(

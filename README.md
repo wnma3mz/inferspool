@@ -61,15 +61,17 @@ inferspool submit tts "请朗读这段话" --voice default --format wav
 
 inferspool status
 inferspool list --status failed --search 租约
-inferspool retry <job-id>
-inferspool keep <job-id>
+inferspool rerun <job-id>
 inferspool delete <job-id>
 ```
 
 首次改密后 CLI 会自动创建本机 API key。脚本和 CI 可设置 `INFERSPOOL_API_KEY`，不需要保存账号密码。`--wait` 成功时退出 0，失败时退出 1。
 
-用户只选择任务类型和通用生成参数，不指定具体模型；模型由执行任务的 GPU Worker 及其本地后端决定。
-图片、视频和语音任务加 `--direct` 时，只会由支持局域网直传的 Worker 执行；结果不上传云端 Storage。默认不加该参数时使用私有云存储。
+用户只选择任务类型和通用生成参数，不指定具体模型；模型由执行任务的 GPU Worker 及其本地后端决定。排队任务会说明是在等待 GPU、模型服务还是空闲容量。
+
+图片、视频和语音任务加 `--direct` 时，只会由当前在线且支持临时获取的 Worker 执行；生成文件不上传云端 Storage，但任务描述和状态仍通过云端调度。默认不加该参数时使用私有云存储。
+
+批量提交和 Webhook 属于高级自动化能力，见 [使用手册](docs/RUNBOOK.md#高级自动化)。普通任务按用户公平轮转，结果按管理员设置的固定期限保留。
 
 ## GPU Worker 快速开始
 

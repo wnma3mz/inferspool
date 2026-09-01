@@ -21,7 +21,7 @@ type Job struct {
 	UserID      string          `json:"user_id"`
 	Type        string          `json:"type"`
 	Status      string          `json:"status"`
-	Priority    int             `json:"priority"`
+	Stage       string          `json:"stage"`
 	Payload     json.RawMessage `json:"payload"`
 	Result      json.RawMessage `json:"result"`
 	Progress    *float64        `json:"progress"`
@@ -32,7 +32,6 @@ type Job struct {
 	CreatedAt   time.Time       `json:"created_at"`
 	FinishedAt  *time.Time      `json:"finished_at"`
 	SourceJobID *string         `json:"source_job_id"`
-	KeepResult  bool            `json:"keep_result"`
 	Tags        []string        `json:"tags"`
 }
 
@@ -268,13 +267,12 @@ func (c *Client) request(method, path string, input any, out any) error {
 	return json.Unmarshal(data, out)
 }
 
-func (c *Client) Submit(jobType string, payload map[string]any, priority int,
+func (c *Client) Submit(jobType string, payload map[string]any,
 	idempotencyKey string) (Job, error) {
 	var job Job
 	params := map[string]any{
-		"type":     jobType,
-		"payload":  payload,
-		"priority": priority,
+		"type":    jobType,
+		"payload": payload,
 	}
 	if idempotencyKey != "" {
 		params["idempotency_key"] = idempotencyKey
@@ -323,18 +321,14 @@ func (c *Client) Cancel(id string) (string, error) {
 	return result.Status, nil
 }
 
-func (c *Client) Retry(id string) (Job, error) {
+func (c *Client) Rerun(id string) (Job, error) {
 	var job Job
-	err := c.request(http.MethodPost, "/jobs/"+url.PathEscape(id)+"/retry", map[string]any{}, &job)
+	err := c.request(http.MethodPost, "/jobs/"+url.PathEscape(id)+"/rerun", map[string]any{}, &job)
 	return job, err
 }
 
 func (c *Client) Delete(id string) error {
 	return c.request(http.MethodDelete, "/jobs/"+url.PathEscape(id), nil, nil)
-}
-
-func (c *Client) Keep(id string, keep bool) error {
-	return c.request(http.MethodPost, "/jobs/"+url.PathEscape(id)+"/keep", map[string]bool{"keep": keep}, nil)
 }
 
 // Stats takes no arguments: queue_stats is readable anonymously and returns no

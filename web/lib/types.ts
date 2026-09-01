@@ -7,6 +7,19 @@ export type JobStatus =
 
 export type JobType = "image" | "video" | "tts" | "llm";
 
+export type JobStage =
+  | "waiting_for_worker"
+  | "waiting_for_service"
+  | "waiting_for_capacity"
+  | "waiting_for_direct_worker"
+  | "assigned"
+  | "generating"
+  | "encoding"
+  | "delivering"
+  | "completed"
+  | "failed"
+  | "canceled";
+
 export const JOB_TYPE_LABELS: Record<JobType, [string, string]> = {
   llm: ["文本生成", "Text generation"],
   image: ["图片生成", "Image generation"],
@@ -20,7 +33,7 @@ export interface Job {
   /** "embed" is retained only so historical rows remain readable. */
   type: JobType | "embed";
   status: JobStatus;
-  priority: number;
+  stage?: JobStage;
   payload: Record<string, unknown>;
   result: Record<string, unknown> | null;
   progress: number | null;
@@ -33,21 +46,20 @@ export interface Job {
   started_at: string | null;
   finished_at: string | null;
   source_job_id: string | null;
-  keep_result: boolean;
   retained_until: string | null;
   tags: string[];
 }
 
-export interface ResultFile {
-	bucket?: string;
-	path?: string;
-	url?: string;
-	delivery?: "cloud" | "direct";
-	expires_at?: string;
+export interface Artifact {
+  kind: "image" | "audio" | "video" | "file";
+  bucket?: string;
+  path?: string;
+  url?: string;
+  delivery?: "cloud" | "direct";
+  expires_at?: string;
   filename: string;
   mime: string;
   bytes: number;
-  kind?: string;
 }
 
 export interface ServiceStat {
@@ -74,6 +86,8 @@ export interface QueueStats {
   running: number;
   workers_online: number;
   services: Record<string, ServiceStat>;
+  /** Fresh services that can return file results directly to the client. */
+  direct?: Record<string, number>;
   workers: {
     id: string | null;
     online: boolean;

@@ -6,15 +6,15 @@ import { usePreferences } from "./Preferences";
 import {
   cancelJob,
   deleteJob,
-  keepJob,
-  retryJob,
+  rerunJob,
   signedResultUrl,
 } from "../lib/useJobs";
 import {
   isTerminal,
   type Job,
+  type JobStage,
   JOB_TYPE_LABELS,
-  type ResultFile,
+  type Artifact,
 } from "../lib/types";
 
 const TYPE_LABELS: Record<Job["type"], [string, string]> = {
@@ -37,6 +37,30 @@ const STATUS_LABELS = {
   failed: ["失败", "Failed"],
   canceled: ["已取消", "Canceled"],
 } as const;
+
+const STAGE_LABELS: Record<JobStage, [string, string]> = {
+  waiting_for_worker: ["等待可用 GPU", "Waiting for a GPU"],
+  waiting_for_service: ["等待模型服务启动或恢复", "Waiting for the model service"],
+  waiting_for_capacity: ["等待空闲容量", "Waiting for available capacity"],
+  waiting_for_direct_worker: [
+    "等待支持临时获取的 GPU",
+    "Waiting for a GPU with temporary delivery",
+  ],
+  assigned: ["已分配到 GPU", "Assigned to a GPU"],
+  generating: ["正在生成", "Generating"],
+  encoding: ["正在编码压缩", "Encoding and compressing"],
+  delivering: ["正在传输结果", "Delivering the result"],
+  completed: ["结果可用", "Result available"],
+  failed: ["执行失败", "Execution failed"],
+  canceled: ["已取消", "Canceled"],
+};
+
+function stageText(job: Job, zh: boolean) {
+  if (job.stage && STAGE_LABELS[job.stage]) {
+    return STAGE_LABELS[job.stage][zh ? 0 : 1];
+  }
+  return STATUS_LABELS[job.status][zh ? 0 : 1];
+}
 
 function describe(job: Job, zh: boolean): string {
   const prompt = job.payload.prompt ?? job.payload.text;
@@ -85,10 +109,6 @@ function duration(job: Job): string | null {
   }s`;
 }
 
-function hasDirectResult(job: Job): boolean {
-	return resultFiles(job).some((file) => file.delivery === "direct");
-}
-
 export function JobRow(
   { job, onChanged }: { job: Job; onChanged?: () => void },
 ) {
@@ -112,13 +132,12 @@ export function JobRow(
     }
   };
 
-  const act = async (name: "retry" | "delete" | "keep") => {
+  const act = async (name: "rerun" | "delete") => {
     setActing(name);
     setCancelError(null);
     try {
-      if (name === "retry") await retryJob(job.id);
-      else if (name === "delete") await deleteJob(job.id);
-      else await keepJob(job.id, !job.keep_result);
+      if (name === "rerun") await rerunJob(job.id);
+      else await deleteJob(job.id);
       onChanged?.();
     } catch (caught) {
       setCancelError(caught instanceof Error ? caught.message : String(caught));
@@ -137,7 +156,7 @@ export function JobRow(
           </strong>
           <span className={`status-pill ${job.status}`} role="status">
             <i />
-            {STATUS_LABELS[job.status][zh ? 0 : 1]}
+            {stageText(job, zh)}
           </span>
         </div>
         <div className="task-meta">
@@ -159,7 +178,7 @@ export function JobRow(
         {job.status === "running" && (
           <div className="task-progress-wrap">
             <div className="task-progress-copy">
-              <span>{job.progress_msg || (zh ? "处理中" : "Processing")}</span>
+              <span>{job.progress_msg || stageText(job, zh)}</span>
               <span>{pct == null ? "" : `${pct}%`}</span>
             </div>
             <div
@@ -182,7 +201,9 @@ export function JobRow(
             {cancelError || job.error}
           </div>
         )}
-        {job.status === "succeeded" && <JobResult job={job} zh={zh} />}
+        {job.status === "succeeded" && (
+          <JobResult job={job} zh={zh} />
+        )}
       </div>
       <div className="task-actions">
         {cancellable && (
@@ -196,24 +217,13 @@ export function JobRow(
               : (zh ? "取消" : "Cancel")}
           </button>
         )}
-        {(job.status === "failed" || job.status === "canceled") && (
+        {isTerminal(job.status) && job.type !== "embed" && (
           <button
             className="task-action"
-            onClick={() => void act("retry")}
+            onClick={() => void act("rerun")}
             disabled={!!acting}
           >
-            {acting === "retry" ? "…" : (zh ? "重试" : "Retry")}
-          </button>
-        )}
-		{isTerminal(job.status) && !hasDirectResult(job) && (
-          <button
-            className="task-action"
-            onClick={() => void act("keep")}
-            disabled={!!acting}
-          >
-            {job.keep_result
-              ? (zh ? "取消长期保留" : "Remove retention")
-              : (zh ? "长期保留" : "Keep indefinitely")}
+            {acting === "rerun" ? "…" : (zh ? "再次运行" : "Run again")}
           </button>
         )}
         {isTerminal(job.status) && (
@@ -230,31 +240,49 @@ export function JobRow(
   );
 }
 
-function resultFiles(job: Job): ResultFile[] {
+function artifactKind(mime: string): Artifact["kind"] {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("audio/")) return "audio";
+  if (mime.startsWith("video/")) return "video";
+  return "file";
+}
+
+function resultArtifacts(job: Job): Artifact[] {
+  const canonical = Array.isArray(job.result?.artifacts)
+    ? job.result.artifacts
+    : [];
+  if (canonical.length) {
+    return canonical.filter((item): item is Artifact =>
+      !!item && typeof item === "object" &&
+      (typeof (item as Artifact).path === "string" ||
+        typeof (item as Artifact).url === "string")
+    );
+  }
+  // Read-only compatibility for jobs created before artifacts were canonical.
   const files = Array.isArray(job.result?.files) ? job.result.files : [];
   const single = job.result?.file && typeof job.result.file === "object"
     ? [job.result.file]
     : [];
-  return [...files, ...single].filter((file): file is ResultFile =>
+  return [...files, ...single].filter((file): file is Artifact =>
     !!file && typeof file === "object" &&
-		(typeof (file as ResultFile).path === "string" ||
-		  typeof (file as ResultFile).url === "string")
-	);
+    (typeof (file as Artifact).path === "string" ||
+      typeof (file as Artifact).url === "string")
+  ).map((file) => ({ ...file, kind: file.kind ?? artifactKind(file.mime) }));
 }
 
-function useResultUrl(jobId: string, file: ResultFile | undefined) {
+function useResultUrl(jobId: string, file: Artifact | undefined) {
   const [url, setUrl] = useState<string | null>(null);
-	useEffect(() => {
-		let active = true;
-		if (!file) return;
-		if (file.delivery === "direct" && file.url) {
-			setUrl(file.url);
-			return () => {
-				active = false;
-			};
-		}
-		if (!file.bucket || !file.path) return;
-		void signedResultUrl(jobId, file.bucket, file.path)
+  useEffect(() => {
+    let active = true;
+    if (!file) return;
+    if (file.delivery === "direct" && file.url) {
+      setUrl(file.url);
+      return () => {
+        active = false;
+      };
+    }
+    if (!file.bucket || !file.path) return;
+    void signedResultUrl(jobId, file.bucket, file.path)
       .then((value) => {
         if (active) setUrl(value);
       })
@@ -264,12 +292,12 @@ function useResultUrl(jobId: string, file: ResultFile | undefined) {
     return () => {
       active = false;
     };
-	}, [jobId, file?.bucket, file?.path, file?.url, file?.delivery]);
+  }, [jobId, file?.bucket, file?.path, file?.url, file?.delivery]);
   return url;
 }
 
 function ResultThumb({ job }: { job: Job }) {
-  const file = resultFiles(job).find((item) => item.mime?.startsWith("image/"));
+  const file = resultArtifacts(job).find((item) => item.kind === "image");
   const url = useResultUrl(job.id, file);
   return (
     <div className={`task-thumb ${url ? "has-result" : ""}`}>
@@ -284,21 +312,82 @@ function JobResult({ job, zh }: { job: Job; zh: boolean }) {
   if (typeof result.text === "string") {
     return <pre className="result-text">{result.text}</pre>;
   }
-  const files = resultFiles(job);
+  const files = resultArtifacts(job);
   if (!files.length) return null;
   return (
     <div className="result-files">
       {files.map((file) => (
-		<ResultFileView key={file.path ?? file.url} jobId={job.id} file={file} zh={zh} />
+        <ArtifactView
+          key={file.path ?? file.url}
+          jobId={job.id}
+          file={file}
+          zh={zh}
+        />
       ))}
     </div>
   );
 }
 
-function ResultFileView(
-  { jobId, file, zh }: { jobId: string; file: ResultFile; zh: boolean },
+function ArtifactView(
+  { jobId, file, zh }: {
+    jobId: string;
+    file: Artifact;
+    zh: boolean;
+  },
 ) {
-	const url = useResultUrl(jobId, file);
+  const url = useResultUrl(jobId, file);
+  const expired = file.delivery === "direct" && !!file.expires_at &&
+    Date.parse(file.expires_at) <= Date.now();
+  const [directState, setDirectState] = useState<
+    "checking" | "reachable" | "expired" | "unreachable"
+  >(expired ? "expired" : "checking");
+
+  useEffect(() => {
+    if (file.delivery !== "direct" || !file.url || expired) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 5000);
+    void fetch(file.url, {
+      headers: { Range: "bytes=0-0" },
+      cache: "no-store",
+      signal: controller.signal,
+    }).then((response) => {
+      if (response.status === 410) setDirectState("expired");
+      else if (response.ok || response.status === 206) {
+        setDirectState("reachable");
+      } else setDirectState("unreachable");
+    }).catch(() => setDirectState("unreachable")).finally(() =>
+      window.clearTimeout(timer)
+    );
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [file.delivery, file.url, expired]);
+
+  if (file.delivery === "direct" && directState === "expired") {
+    return (
+      <div className="result-unavailable" role="status">
+        <strong>{zh ? "临时文件已过期" : "Temporary file expired"}</strong>
+        <span>
+          {zh
+            ? "任务记录仍保留，可使用右侧“再次运行”。"
+            : "The job record remains; use Run again on this task."}
+        </span>
+      </div>
+    );
+  }
+  if (file.delivery === "direct" && directState === "unreachable") {
+    return (
+      <div className="result-unavailable" role="status">
+        <strong>{zh ? "当前设备无法访问 GPU" : "This device cannot reach the GPU"}</strong>
+        <span>
+          {zh
+            ? "请连接对应局域网；如需云端保存，请在提交页重新提交。"
+            : "Join the GPU network, or submit again from the form and save in cloud."}
+        </span>
+      </div>
+    );
+  }
   if (!url) {
     return (
       <span className="result-loading">
@@ -306,36 +395,38 @@ function ResultFileView(
       </span>
     );
 	}
-	const expiry = file.delivery === "direct" && file.expires_at
-		? (
-		  <small className="field-hint">
-			{zh ? "局域网临时结果，过期时间：" : "Temporary LAN result, expires: "}
-			{new Date(file.expires_at).toLocaleString()}
-		  </small>
-		)
-		: null;
-	if (file.mime.startsWith("image/")) {
-		return (
-		  <div>
-			<a href={url} target="_blank" rel="noreferrer">
-			  <img className="result-image" src={url} alt={file.filename} />
-			</a>
-			{expiry}
-		  </div>
-		);
-	}
-	if (file.mime.startsWith("audio/")) return <div><audio controls src={url} />{expiry}</div>;
-	if (file.mime.startsWith("video/")) {
-		return <div><video className="result-video" controls src={url} />{expiry}</div>;
-	}
-	return (
-		<div>
-		  <a className="result-download" href={url} target="_blank" rel="noreferrer">
-			{zh ? `下载 ${file.filename}` : `Download ${file.filename}`}
-		  </a>
-		  {expiry}
-		</div>
-	);
+  const expiry = file.delivery === "direct" && file.expires_at
+    ? (
+      <small className="field-hint">
+        {zh ? "当前设备临时文件，过期时间：" : "Temporary file, expires: "}
+        {new Date(file.expires_at).toLocaleString()}
+      </small>
+    )
+    : null;
+  if (file.mime.startsWith("image/")) {
+    return (
+      <div>
+        <a href={url} target="_blank" rel="noreferrer">
+          <img className="result-image" src={url} alt={file.filename} />
+        </a>
+        {expiry}
+      </div>
+    );
+  }
+  if (file.mime.startsWith("audio/")) {
+    return <div><audio controls src={url} />{expiry}</div>;
+  }
+  if (file.mime.startsWith("video/")) {
+    return <div><video className="result-video" controls src={url} />{expiry}</div>;
+  }
+  return (
+    <div>
+      <a className="result-download" href={url} target="_blank" rel="noreferrer">
+        {zh ? `下载 ${file.filename}` : `Download ${file.filename}`}
+      </a>
+      {expiry}
+    </div>
+  );
 }
 
 export function JobList(

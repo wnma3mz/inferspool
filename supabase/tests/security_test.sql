@@ -13,8 +13,8 @@ delete from workers;
 delete from auth.users;
 
 insert into auth.users (id) values (:'alice'), (:'bob');
-insert into workers (id, capabilities, token_hash) values
-  ('home-gpu', '{image,tts}', extensions.crypt('secret-a', extensions.gen_salt('bf')));
+insert into workers (id, token_hash) values
+  ('home-gpu', extensions.crypt('secret-a', extensions.gen_salt('bf')));
 select report_services('home-gpu', 'secret-a', '[{"type":"image","healthy":true},{"type":"tts","healthy":true}]');
 
 -- Owner must not bypass RLS, or these tests are meaningless.
@@ -90,7 +90,7 @@ begin
   select * into r from jobs limit 1;
   perform assert(r.status = 'queued',          'forged status reset to queued');
   perform assert(r.attempts = 0,               'forged attempts reset to 0');
-  perform assert(r.priority = 5,               'ordinary-user priority clamped to 5');
+  perform assert(r.priority = 0,               'ordinary-user priority forced to fair default');
   perform assert(r.max_attempts = 10,          'max_attempts clamped to 10');
   perform assert(r.result is null,             'forged result cleared');
   perform assert(r.worker_id is null,          'forged worker_id cleared');
@@ -202,9 +202,9 @@ declare v_id uuid; v_job jobs;
 begin
   truncate jobs cascade;
   delete from workers;
-  insert into workers (id, capabilities, token_hash) values
-    ('w1', '{image}', extensions.crypt('t1', extensions.gen_salt('bf'))),
-    ('w2', '{image}', extensions.crypt('t2', extensions.gen_salt('bf')));
+  insert into workers (id, token_hash) values
+    ('w1', extensions.crypt('t1', extensions.gen_salt('bf'))),
+    ('w2', extensions.crypt('t2', extensions.gen_salt('bf')));
   perform report_services('w1', 't1', '[{"type":"image","healthy":true}]');
   perform report_services('w2', 't2', '[{"type":"image","healthy":true}]');
 
@@ -319,8 +319,8 @@ end $$;
 reset role;
 truncate jobs cascade;
 delete from workers;
-insert into workers (id, capabilities, token_hash) values
-  ('uploader', '{image}', extensions.crypt('upload-secret', extensions.gen_salt('bf')));
+insert into workers (id, token_hash) values
+  ('uploader', extensions.crypt('upload-secret', extensions.gen_salt('bf')));
 select report_services('uploader', 'upload-secret', '[{"type":"image","healthy":true}]');
 do $$
 declare v_id uuid; v_job jobs;

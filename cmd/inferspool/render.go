@@ -37,6 +37,23 @@ func colorStatus(status string) string {
 	return colorize(status, statusColor[status])
 }
 
+func stageLabel(job Job) string {
+	labels := map[string]string{
+		"waiting_for_worker":        "waiting for GPU",
+		"waiting_for_service":       "waiting for model service",
+		"waiting_for_capacity":      "waiting for capacity",
+		"waiting_for_direct_worker": "waiting for direct-capable GPU",
+		"assigned":                  "assigned",
+		"generating":                "generating",
+		"encoding":                  "encoding",
+		"delivering":                "delivering",
+	}
+	if label := labels[job.Stage]; label != "" {
+		return label
+	}
+	return job.Status
+}
+
 func printJobLine(job Job) {
 	pct := ""
 	if job.Progress != nil && job.Status == "running" {
@@ -44,7 +61,7 @@ func printJobLine(job Job) {
 	}
 
 	// Pad before colorizing: escape codes would break column alignment.
-	status := fmt.Sprintf("%-9s", job.Status)
+	status := fmt.Sprintf("%-25s", stageLabel(job))
 	if colorEnabled {
 		status = colorize(status, statusColor[job.Status])
 	}
@@ -95,6 +112,13 @@ func signResultFiles(job Job, client *Client) Job {
 			file["url"] = url
 		}
 	}
+	if artifacts, ok := result["artifacts"].([]any); ok {
+		for _, value := range artifacts {
+			if file, ok := value.(map[string]any); ok {
+				sign(file)
+			}
+		}
+	}
 	if files, ok := result["files"].([]any); ok {
 		for _, value := range files {
 			if file, ok := value.(map[string]any); ok {
@@ -130,26 +154,14 @@ func printResult(job Job) {
 		return
 	}
 
-	// File-shaped multimedia results print one path per line.
+	// Artifact-shaped multimedia results print one path per line. Legacy
+	// file/files fields remain readable for jobs created before the migration.
+	if artifacts, ok := result["artifacts"].([]any); ok && len(artifacts) > 0 {
+		printFiles(artifacts)
+		return
+	}
 	if files, ok := result["files"].([]any); ok && len(files) > 0 {
-		for _, f := range files {
-			file, ok := f.(map[string]any)
-			if !ok {
-				continue
-			}
-			name, _ := file["url"].(string)
-			if name == "" {
-				name, _ = file["path"].(string)
-			}
-			if name == "" {
-				name, _ = file["filename"].(string)
-			}
-			sub, _ := file["subfolder"].(string)
-			if sub != "" {
-				name = sub + "/" + name
-			}
-			fmt.Println(name)
-		}
+		printFiles(files)
 		return
 	}
 	if file, ok := result["file"].(map[string]any); ok {
@@ -178,4 +190,25 @@ func printResult(job Job) {
 		summary[k] = v
 	}
 	fmt.Println(mustJSON(summary))
+}
+
+func printFiles(files []any) {
+	for _, value := range files {
+		file, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := file["url"].(string)
+		if name == "" {
+			name, _ = file["path"].(string)
+		}
+		if name == "" {
+			name, _ = file["filename"].(string)
+		}
+		sub, _ := file["subfolder"].(string)
+		if sub != "" {
+			name = sub + "/" + name
+		}
+		fmt.Println(name)
+	}
 }
