@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/jpeg"
+	"image/png"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -43,11 +46,12 @@ type Handlers struct {
 	cfg    Config
 	queue  *QueueClient
 	http   *http.Client
+	direct *DirectResultServer
 	byType map[string]Handler
 }
 
-func newHandlers(cfg Config, queue *QueueClient, registry *ServiceRegistry) *Handlers {
-	h := &Handlers{cfg: cfg, queue: queue, http: &http.Client{}, byType: map[string]Handler{}}
+func newHandlers(cfg Config, queue *QueueClient, registry *ServiceRegistry, direct *DirectResultServer) *Handlers {
+	h := &Handlers{cfg: cfg, queue: queue, http: &http.Client{}, direct: direct, byType: map[string]Handler{}}
 	for _, jobType := range registry.Types() {
 		switch jobType {
 		case "llm":
@@ -61,6 +65,51 @@ func newHandlers(cfg Config, queue *QueueClient, registry *ServiceRegistry) *Han
 		}
 	}
 	return h
+}
+
+func resultDelivery(job Job) string {
+	if value, ok := job.Payload["_result_delivery"].(string); ok && value == "direct" {
+		return "direct"
+	}
+	return "cloud"
+}
+
+func (h *Handlers) deliverResult(ctx context.Context, job Job, filename, mime string, content []byte) (map[string]any, error) {
+	if resultDelivery(job) == "direct" {
+		result, err := h.direct.Publish(filename, mime, content)
+		if err == nil && logLevelEnabled(h.cfg.LogLevel, "INFO") {
+			log.Printf("result delivered job=%.8s delivery=direct filename=%q content_type=%q bytes=%d",
+				job.ID, filename, mime, len(content))
+		}
+		return result, err
+	}
+	result, err := h.queue.UploadResult(ctx, job.ID, filename, mime, content)
+	if err == nil && logLevelEnabled(h.cfg.LogLevel, "INFO") {
+		log.Printf("result delivered job=%.8s delivery=cloud filename=%q content_type=%q bytes=%d",
+			job.ID, filename, mime, len(content))
+	}
+	return result, err
+}
+
+func compressImage(content []byte) ([]byte, string, string) {
+	image, err := png.Decode(bytes.NewReader(content))
+	if err != nil {
+		return content, "image/png", ".png"
+	}
+	bounds := image.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, alpha := image.At(x, y).RGBA()
+			if alpha != 0xffff {
+				return content, "image/png", ".png"
+			}
+		}
+	}
+	var encoded bytes.Buffer
+	if err := jpeg.Encode(&encoded, image, &jpeg.Options{Quality: 88}); err != nil || encoded.Len() >= len(content) {
+		return content, "image/png", ".png"
+	}
+	return encoded.Bytes(), "image/jpeg", ".jpg"
 }
 
 func (h *Handlers) request(ctx context.Context, method, target string, body any, timeout time.Duration) (*http.Response, error) {
@@ -97,11 +146,6 @@ type cancelReadCloser struct {
 }
 
 func (r *cancelReadCloser) Close() error { err := r.ReadCloser.Close(); r.cancel(); return err }
-
-func responseError(prefix string, resp *http.Response) error {
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("%s HTTP %d: %.200s", prefix, resp.StatusCode, data)
-}
 
 func backendModel(health ServiceHealth) string {
 	if len(health.Models) > 0 {
@@ -169,13 +213,23 @@ func (h *Handlers) runLLM(ctx context.Context, job Job, batch *BatchContext, hea
 		"temperature": numberValue(job.Payload["temperature"], .7),
 		"stream":      true,
 	}
+	requestData, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	target := health.BaseURL + "/v1/chat/completions"
+	started := logBackendRequest(h.cfg.LogLevel, job.ID, "llm", http.MethodPost, target, "application/json", requestData)
 	resp, err := h.request(ctx, http.MethodPost, health.BaseURL+"/v1/chat/completions", body, h.cfg.RequestTime)
 	if err != nil {
+		logBackendResponse(h.cfg.LogLevel, job.ID, "llm", 0, "", nil, started, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, responseError("llm", resp)
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		err := fmt.Errorf("llm HTTP %d: %.200s", resp.StatusCode, data)
+		logBackendResponse(h.cfg.LogLevel, job.ID, "llm", resp.StatusCode, resp.Header.Get("Content-Type"), data, started, fmt.Errorf("HTTP %d", resp.StatusCode))
+		return nil, err
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -213,11 +267,16 @@ func (h *Handlers) runLLM(ctx context.Context, job Job, batch *BatchContext, hea
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		logBackendResponse(h.cfg.LogLevel, job.ID, "llm", resp.StatusCode, "application/json", []byte(output.String()), started, err)
 		return nil, err
 	}
 	if output.Len() == 0 {
-		return nil, errors.New("llm returned no content")
+		err := errors.New("llm returned no content")
+		logBackendResponse(h.cfg.LogLevel, job.ID, "llm", resp.StatusCode, "application/json", nil, started, err)
+		return nil, err
 	}
+	responseData, _ := json.Marshal(map[string]any{"text": output.String(), "model": body["model"], "chunks": chunks})
+	logBackendResponse(h.cfg.LogLevel, job.ID, "llm", resp.StatusCode, "application/json", responseData, started, nil)
 	return map[string]any{"text": output.String(), "model": body["model"], "chunks": chunks}, nil
 }
 
@@ -231,7 +290,15 @@ func copyPayloadFields(dst, src map[string]any, fields ...string) {
 
 // jobRequest keeps checking the batch while a synchronous Omni request runs.
 // Canceling a task closes the HTTP request, which also stops server generation.
-func (h *Handlers) jobRequest(ctx context.Context, job Job, batch *BatchContext, method, target, contentType string, body io.Reader) (int, http.Header, []byte, error) {
+func (h *Handlers) jobRequest(ctx context.Context, job Job, batch *BatchContext, service, method, target, contentType string, body []byte) (status int, headers http.Header, data []byte, resultErr error) {
+	started := logBackendRequest(h.cfg.LogLevel, job.ID, service, method, target, contentType, body)
+	defer func() {
+		responseType := ""
+		if headers != nil {
+			responseType = headers.Get("Content-Type")
+		}
+		logBackendResponse(h.cfg.LogLevel, job.ID, service, status, responseType, data, started, resultErr)
+	}()
 	requestCtx, cancel := context.WithTimeout(ctx, h.cfg.RequestTime)
 	jobError := make(chan error, 1)
 	done := make(chan struct{})
@@ -254,7 +321,7 @@ func (h *Handlers) jobRequest(ctx context.Context, job Job, batch *BatchContext,
 			}
 		}
 	}()
-	req, err := http.NewRequestWithContext(requestCtx, method, target, body)
+	req, err := http.NewRequestWithContext(requestCtx, method, target, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -271,7 +338,7 @@ func (h *Handlers) jobRequest(ctx context.Context, job Job, batch *BatchContext,
 		}
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	data, err = io.ReadAll(resp.Body)
 	if err != nil {
 		select {
 		case jobErr := <-jobError:
@@ -307,7 +374,7 @@ func (h *Handlers) runImage(ctx context.Context, job Job, batch *BatchContext, h
 	if err := batch.Check(job.ID, floatPtr(.1), stringPtr("generating image")); err != nil {
 		return nil, err
 	}
-	status, _, responseData, err := h.jobRequest(ctx, job, batch, http.MethodPost, health.BaseURL+"/v1/images/generations", "application/json", bytes.NewReader(requestData))
+	status, _, responseData, err := h.jobRequest(ctx, job, batch, "image", http.MethodPost, health.BaseURL+"/v1/images/generations", "application/json", requestData)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +398,8 @@ func (h *Handlers) runImage(ctx context.Context, job Job, batch *BatchContext, h
 		if err != nil {
 			return nil, fmt.Errorf("image %d has invalid base64: %w", index+1, err)
 		}
-		uploaded, err := h.queue.UploadResult(ctx, job.ID, fmt.Sprintf("image-%d.png", index+1), "image/png", content)
+		content, mimeType, extension := compressImage(content)
+		uploaded, err := h.deliverResult(ctx, job, fmt.Sprintf("image-%d%s", index+1, extension), mimeType, content)
 		if err != nil {
 			return nil, err
 		}
@@ -361,7 +429,7 @@ func (h *Handlers) runVideo(ctx context.Context, job Job, batch *BatchContext, h
 	if err := batch.Check(job.ID, floatPtr(.1), stringPtr("generating video")); err != nil {
 		return nil, err
 	}
-	status, headers, content, err := h.jobRequest(ctx, job, batch, http.MethodPost, health.BaseURL+"/v1/videos/sync", writer.FormDataContentType(), &body)
+	status, headers, content, err := h.jobRequest(ctx, job, batch, "video", http.MethodPost, health.BaseURL+"/v1/videos/sync", writer.FormDataContentType(), body.Bytes())
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +441,7 @@ func (h *Handlers) runVideo(ctx context.Context, job Job, batch *BatchContext, h
 		mimeType = "video/mp4"
 	}
 	extension := extensionForMIME(mimeType, ".mp4")
-	uploaded, err := h.queue.UploadResult(ctx, job.ID, "video"+extension, mimeType, content)
+	uploaded, err := h.deliverResult(ctx, job, "video"+extension, mimeType, content)
 	if err != nil {
 		return nil, err
 	}
@@ -388,13 +456,13 @@ func (h *Handlers) runTTS(ctx context.Context, job Job, batch *BatchContext, hea
 	if err := batch.Check(job.ID, floatPtr(.1), stringPtr("synthesizing")); err != nil {
 		return nil, err
 	}
-	body := map[string]any{"input": text, "model": backendModel(health)}
+	body := map[string]any{"input": text, "model": backendModel(health), "response_format": "opus"}
 	copyPayloadFields(body, job.Payload, "voice", "response_format", "speed", "task_type", "language", "instructions", "max_new_tokens", "ref_audio", "ref_text", "x_vector_only_mode", "non_streaming_mode")
 	requestData, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	status, headers, content, err := h.jobRequest(ctx, job, batch, http.MethodPost, health.BaseURL+"/v1/audio/speech", "application/json", bytes.NewReader(requestData))
+	status, headers, content, err := h.jobRequest(ctx, job, batch, "tts", http.MethodPost, health.BaseURL+"/v1/audio/speech", "application/json", requestData)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +480,7 @@ func (h *Handlers) runTTS(ctx context.Context, job Job, batch *BatchContext, hea
 		return nil, fmt.Errorf("tts returned unexpected content-type: %s", contentType)
 	}
 	extension := extensionForMIME(contentType, ".wav")
-	uploaded, err := h.queue.UploadResult(ctx, job.ID, "speech"+extension, contentType, content)
+	uploaded, err := h.deliverResult(ctx, job, "speech"+extension, contentType, content)
 	if err != nil {
 		return nil, err
 	}

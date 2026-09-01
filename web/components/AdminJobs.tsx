@@ -29,7 +29,6 @@ interface AdminUser {
 interface AdminWorker {
   id: string;
   name: string;
-  capabilities: string[];
   disabled_at: string | null;
   last_heartbeat: string | null;
   services: { type: string; healthy: boolean; detail?: string }[];
@@ -720,7 +719,6 @@ function Workers(
   },
 ) {
   const [id, setId] = useState("");
-  const [types, setTypes] = useState("llm");
   const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const create = async () => {
@@ -730,7 +728,6 @@ function Workers(
         body: jsonBody({
           id,
           name: id,
-          types: types.split(",").map((v) => v.trim()).filter(Boolean),
         }),
       });
       setSecret(value.env);
@@ -777,16 +774,6 @@ function Workers(
             placeholder="home-4090"
           />
         </div>
-        <div>
-          <label>
-            {zh ? "支持的任务类型（逗号分隔）" : "Job types (comma-separated)"}
-          </label>
-          <input
-            value={types}
-            onChange={(e) => setTypes(e.target.value)}
-            placeholder="llm,image"
-          />
-        </div>
         <button
           className="button-primary"
           disabled={id.length < 3}
@@ -812,7 +799,6 @@ function Workers(
           <thead>
             <tr>
               <th>{zh ? "节点" : "Worker"}</th>
-              <th>{zh ? "能力" : "Capabilities"}</th>
               <th>{zh ? "服务" : "Services"}</th>
               <th>{zh ? "最近心跳" : "Last heartbeat"}</th>
               <th>{zh ? "状态" : "Status"}</th>
@@ -825,11 +811,6 @@ function Workers(
                 <td>
                   <strong>{worker.name || worker.id}</strong>
                   <small>{worker.id}</small>
-                </td>
-                <td>
-                  {worker.capabilities.map((type) =>
-                    JOB_TYPE_LABELS[type as JobType]?.[zh ? 0 : 1] ?? type
-                  ).join("、")}
                 </td>
                 <td>
                   {(worker.services || []).map((service) =>

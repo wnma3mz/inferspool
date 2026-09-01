@@ -28,6 +28,12 @@ func buildPayload(jobType, text string, f flags) (map[string]any, error) {
 			return nil, fmt.Errorf("--payload is not valid JSON: %w", err)
 		}
 	}
+	if f.direct {
+		if jobType == "llm" {
+			return nil, fmt.Errorf("--direct is only supported for image, video, and tts tasks")
+		}
+		payload["_result_delivery"] = "direct"
+	}
 	payload[promptField(jobType)] = text
 	if f.voice != "" {
 		if jobType != "tts" {

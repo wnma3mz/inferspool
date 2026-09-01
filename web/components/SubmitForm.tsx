@@ -44,7 +44,8 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
   const [fps, setFps] = useState("24");
   const [voice, setVoice] = useState("default");
   const [speed, setSpeed] = useState("1");
-  const [format, setFormat] = useState("wav");
+	const [format, setFormat] = useState("opus");
+	const [delivery, setDelivery] = useState<"cloud" | "direct">("cloud");
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const { run } = useSubmitting();
@@ -79,7 +80,7 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
         if (type === "llm" && images.length > 0) {
           payload.images = await Promise.all(images.map(uploadInputImage));
         }
-        await submitJob(type, payload);
+		await submitJob(type, payload, delivery);
         setText("");
         setImages([]);
         setSubmitted(true);
@@ -254,8 +255,26 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
             </>
           )}
         </div>
-        <div className="prompt-actions">
-          <span className="prompt-tools">
+		<div className="prompt-actions">
+		  <span className="prompt-tools">
+			{type !== "llm" && (
+			  <label>
+				<span>{zh ? "结果传输" : "Result delivery"}</span>
+				<select
+				  aria-label={zh ? "结果传输" : "Result delivery"}
+				  value={delivery}
+				  onChange={(event) =>
+					setDelivery(event.target.value as "cloud" | "direct")}
+				>
+				  <option value="cloud">
+					{zh ? "私有云存储" : "Private cloud storage"}
+				  </option>
+				  <option value="direct">
+					{zh ? "局域网直传" : "LAN direct"}
+				  </option>
+				</select>
+			  </label>
+			)}
             {type === "llm" && (
               <label className="attach-button">
                 <Icon name="image" /> {zh ? "添加图片" : "Add images"}
@@ -295,7 +314,14 @@ export function SubmitForm({ onSubmitted }: { onSubmitted: () => void }) {
           >
             <Icon name="send" /> {zh ? "提交任务" : "Submit task"}
           </button>
-        </div>
+		</div>
+		{type !== "llm" && delivery === "direct" && (
+		  <small className="field-hint">
+			{zh
+			  ? "浏览器必须能访问 Worker；结果仅在 Worker 内存短时保留。HTTPS 页面需要可信的 HTTPS 直连地址。"
+			  : "Your browser must reach the Worker. Results stay briefly in Worker memory; HTTPS pages require a trusted HTTPS direct URL."}
+		  </small>
+		)}
       </div>
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {submitted && (

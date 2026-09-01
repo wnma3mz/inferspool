@@ -15,6 +15,7 @@ delete from auth.users;
 insert into auth.users (id) values (:'alice'), (:'bob');
 insert into workers (id, capabilities, token_hash) values
   ('home-gpu', '{image,tts}', extensions.crypt('secret-a', extensions.gen_salt('bf')));
+select report_services('home-gpu', 'secret-a', '[{"type":"image","healthy":true},{"type":"tts","healthy":true}]');
 
 -- Owner must not bypass RLS, or these tests are meaningless.
 alter table jobs force row level security;
@@ -204,6 +205,8 @@ begin
   insert into workers (id, capabilities, token_hash) values
     ('w1', '{image}', extensions.crypt('t1', extensions.gen_salt('bf'))),
     ('w2', '{image}', extensions.crypt('t2', extensions.gen_salt('bf')));
+  perform report_services('w1', 't1', '[{"type":"image","healthy":true}]');
+  perform report_services('w2', 't2', '[{"type":"image","healthy":true}]');
 
   insert into jobs (user_id, type, payload)
   values ('11111111-1111-1111-1111-111111111111', 'image', '{}') returning id into v_id;
@@ -318,6 +321,7 @@ truncate jobs cascade;
 delete from workers;
 insert into workers (id, capabilities, token_hash) values
   ('uploader', '{image}', extensions.crypt('upload-secret', extensions.gen_salt('bf')));
+select report_services('uploader', 'upload-secret', '[{"type":"image","healthy":true}]');
 do $$
 declare v_id uuid; v_job jobs;
 begin
@@ -349,7 +353,8 @@ begin
     'public.complete_job(text,text,uuid,jsonb)',
     'public.fail_job(text,text,uuid,text,boolean)',
     'public.report_services(text,text,jsonb)',
-    'public.pending_by_type(text,text)'
+    'public.pending_by_type(text,text)',
+    'public.reclaim_expired_jobs()'
   ] loop
     perform assert(has_function_privilege('service_role', signature, 'EXECUTE'),
                    'product API may execute ' || signature);

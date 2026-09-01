@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,14 +18,16 @@ type Config struct {
 	WorkerToken string
 	gatewayKey  string
 
-	Lease       time.Duration
-	Heartbeat   time.Duration
-	IdlePoll    time.Duration
-	ReportEvery time.Duration
-	RequestTime time.Duration
-	LogLevel    string
-	Exclusive   bool
-	StopGrace   time.Duration
+	Lease                   time.Duration
+	Heartbeat               time.Duration
+	IdlePoll                time.Duration
+	ReportEvery             time.Duration
+	RequestTime             time.Duration
+	LogLevel                string
+	Exclusive               bool
+	StopGrace               time.Duration
+	DirectListen, DirectURL string
+	DirectTTL               time.Duration
 
 	LLMURL, ImageURL, VideoURL, TTSURL string
 	LLMCapacity                        int
@@ -141,22 +145,45 @@ func loadConfig() (Config, error) {
 		return Config{}, err
 	}
 	c := Config{
-		ServerURL:   strings.TrimRight(productEnv("INFERSPOOL_URL", "SUPABASE_URL", defaultServerURL), "/"),
-		gatewayKey:  productEnv("INFERSPOOL_GATEWAY_KEY", "SUPABASE_ANON_KEY", defaultGatewayKey),
-		WorkerID:    firstEnv("INFERSPOOL_WORKER_ID", "WORKER_ID"),
-		WorkerToken: firstEnv("INFERSPOOL_WORKER_TOKEN", "WORKER_TOKEN"),
-		Lease:       time.Duration(max(1, leaseSeconds)) * time.Second,
-		Heartbeat:   time.Duration(max(1, heartbeatSeconds)) * time.Second,
-		IdlePoll:    time.Duration(idleSeconds * float64(time.Second)),
-		ReportEvery: time.Duration(reportSeconds * float64(time.Second)),
-		RequestTime: time.Duration(requestSeconds * float64(time.Second)),
-		StopGrace:   time.Duration(stopSeconds * float64(time.Second)),
-		LogLevel:    strings.ToUpper(envString("INFERSPOOL_LOG_LEVEL", "INFO")),
-		Exclusive:   envString("INFERSPOOL_EXCLUSIVE_GPU", "1") == "1",
-		LLMURL:      strings.TrimRight(os.Getenv("INFERSPOOL_LLM_URL"), "/"),
-		ImageURL:    strings.TrimRight(os.Getenv("INFERSPOOL_IMAGE_URL"), "/"),
-		VideoURL:    strings.TrimRight(os.Getenv("INFERSPOOL_VIDEO_URL"), "/"),
-		TTSURL:      strings.TrimRight(os.Getenv("INFERSPOOL_TTS_URL"), "/"),
+		ServerURL:    strings.TrimRight(productEnv("INFERSPOOL_URL", "SUPABASE_URL", defaultServerURL), "/"),
+		gatewayKey:   productEnv("INFERSPOOL_GATEWAY_KEY", "SUPABASE_ANON_KEY", defaultGatewayKey),
+		WorkerID:     firstEnv("INFERSPOOL_WORKER_ID", "WORKER_ID"),
+		WorkerToken:  firstEnv("INFERSPOOL_WORKER_TOKEN", "WORKER_TOKEN"),
+		Lease:        time.Duration(max(1, leaseSeconds)) * time.Second,
+		Heartbeat:    time.Duration(max(1, heartbeatSeconds)) * time.Second,
+		IdlePoll:     time.Duration(idleSeconds * float64(time.Second)),
+		ReportEvery:  time.Duration(reportSeconds * float64(time.Second)),
+		RequestTime:  time.Duration(requestSeconds * float64(time.Second)),
+		StopGrace:    time.Duration(stopSeconds * float64(time.Second)),
+		LogLevel:     strings.ToUpper(envString("INFERSPOOL_LOG_LEVEL", "INFO")),
+		DirectListen: strings.TrimSpace(os.Getenv("INFERSPOOL_DIRECT_LISTEN")),
+		DirectURL:    strings.TrimRight(strings.TrimSpace(os.Getenv("INFERSPOOL_DIRECT_URL")), "/"),
+		DirectTTL:    10 * time.Minute,
+		Exclusive:    envString("INFERSPOOL_EXCLUSIVE_GPU", "1") == "1",
+		LLMURL:       strings.TrimRight(os.Getenv("INFERSPOOL_LLM_URL"), "/"),
+		ImageURL:     strings.TrimRight(os.Getenv("INFERSPOOL_IMAGE_URL"), "/"),
+		VideoURL:     strings.TrimRight(os.Getenv("INFERSPOOL_VIDEO_URL"), "/"),
+		TTSURL:       strings.TrimRight(os.Getenv("INFERSPOOL_TTS_URL"), "/"),
+	}
+	if !slices.Contains([]string{"DEBUG", "INFO", "WARN", "ERROR"}, c.LogLevel) {
+		return Config{}, fmt.Errorf("INFERSPOOL_LOG_LEVEL must be DEBUG, INFO, WARN, or ERROR")
+	}
+	directTTLSeconds, err := envInt("INFERSPOOL_DIRECT_TTL_SECS", 600)
+	if err != nil {
+		return Config{}, err
+	}
+	c.DirectTTL = time.Duration(directTTLSeconds) * time.Second
+	if (c.DirectListen == "") != (c.DirectURL == "") {
+		return Config{}, errors.New("INFERSPOOL_DIRECT_LISTEN and INFERSPOOL_DIRECT_URL must be set together")
+	}
+	if c.DirectURL != "" {
+		parsed, err := url.Parse(c.DirectURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return Config{}, errors.New("INFERSPOOL_DIRECT_URL must be an http(s) URL reachable by users")
+		}
+		if c.DirectTTL <= 0 {
+			return Config{}, errors.New("INFERSPOOL_DIRECT_TTL_SECS must be positive")
+		}
 	}
 	capacities := []struct {
 		name     string

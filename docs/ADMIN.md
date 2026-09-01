@@ -34,13 +34,14 @@ inferspool admin user delete <user-id>
 
 ## GPU Worker 管理
 
-创建 Worker 时声明它允许提供的任务类型：
+创建 Worker 身份：
 
 ```bash
-inferspool admin worker create home-4090 --name "Home 4090" --types llm,image,video,tts
+inferspool admin worker create home-4090 --name "Home 4090"
 ```
 
 命令会一次性输出完整 Worker 凭据。将其保存为 `worker.env` 后交给 GPU 提供者；数据库只保存 token 的 bcrypt hash，之后无法找回原 token。
+Worker 会根据 `worker.env` 中配置的本地推理端点自动探活并上报能力，不需要在云端重复选择任务类型。新增或移除模型服务后重启 Worker 即可更新能力。
 
 ```bash
 inferspool admin worker list

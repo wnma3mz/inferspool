@@ -98,3 +98,18 @@ func TestLoadConfigAcceptsLegacyWorkerEnvironment(t *testing.T) {
 		t.Fatalf("legacy worker environment not migrated: %#v", cfg)
 	}
 }
+
+func TestLoadConfigRejectsUnknownLogLevel(t *testing.T) {
+	t.Setenv("INFERSPOOL_LOG_LEVEL", "VERBOSE")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("expected invalid log level to fail")
+	}
+}
+
+func TestLoadConfigRequiresCompleteDirectResultConfig(t *testing.T) {
+	t.Setenv("INFERSPOOL_DIRECT_LISTEN", ":9090")
+	t.Setenv("INFERSPOOL_DIRECT_URL", "")
+	if _, err := loadConfig(); err == nil {
+		t.Fatal("expected incomplete direct result config to fail")
+	}
+}

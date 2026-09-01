@@ -25,6 +25,7 @@ inferspool password
 inferspool submit llm "用一句话介绍杭州" --wait
 inferspool submit llm "描述这两张图" --image a.jpg --image https://example.com/b.png -w
 inferspool submit image "一只猫骑自行车" --size 1024x1024 --steps 30
+inferspool submit image "一只猫骑自行车" --direct --wait
 inferspool submit video "城市上空的云" --seconds 5 --fps 24
 inferspool submit tts "请朗读这段话" --voice default --format wav
 
@@ -45,6 +46,7 @@ inferspool webhook list
 ```
 
 GPU 离线时任务会留在云端排队，上线后自动执行。配置位于系统标准配置目录，脚本也可直接设置 `INFERSPOOL_API_KEY`。
+图片、视频和语音任务加 `--direct` 后，会跳过云端 Storage，由支持直传的 Worker 返回局域网临时 URL；不加时默认使用私有云存储。CLI 所在机器必须能够访问 Worker 上报的地址。
 
 ## GPU 提供者
 
@@ -56,6 +58,8 @@ INFERSPOOL_WORKER_TOKEN=<token>
 INFERSPOOL_LLM_URL=http://127.0.0.1:18080
 INFERSPOOL_LLM_CAPACITY=1
 ```
+
+配置决定 Worker 上报的能力，不需要再在云端维护一份任务类型列表。新增或移除端点后重启 Worker；服务探活失败时该类型会自动停止接单。
 
 先启动 vLLM / vLLM-Omni，再启动 Worker：
 
@@ -80,5 +84,31 @@ echo $! >worker.pid
 kill -TERM "$(cat worker.pid)"
 tail -f worker.log                 # 等待 drained, exiting
 ```
+
+`INFERSPOOL_LOG_LEVEL=INFO` 记录每次推理请求的任务 ID、服务、接口、HTTP
+状态、耗时和请求/响应字节数。排障时可设为 `DEBUG`，额外记录最多 4 KiB 的
+脱敏请求/响应 JSON。token、签名 URL、base64 图片与音视频二进制始终省略。
+Worker 只写 stdout/stderr，由 systemd、Docker 或 shell 重定向负责落盘轮转。
+
+### 结果传输
+
+默认 `cloud` 模式把压缩后的结果上传到私有 Supabase Storage。Worker 会在 JPEG
+确实更小时把无透明通道的 PNG 转成 quality 88 JPEG；Web 的 TTS 默认请求 Opus；
+视频保留模型已经压缩好的编码，避免有损二次转码。
+
+同一局域网可启用 `direct`：
+
+```env
+INFERSPOOL_DIRECT_LISTEN=192.168.1.20:9090
+INFERSPOOL_DIRECT_URL=https://gpu.home.example:9090
+INFERSPOOL_DIRECT_TTL_SECS=600
+```
+
+直传结果只驻留 Worker 内存，通过 256-bit 随机 URL 下载，过期自动删除，不经过
+Supabase Storage。Worker 默认不开启监听；两项配置必须同时存在。`DIRECT_URL`
+必须是用户浏览器可达的地址，而且 HTTPS 网页必须使用浏览器信任的 HTTPS
+Worker 地址。直传缓冲区最多 1 GiB；满时任务明确失败，用户可改用 cloud。
+Worker 内置的是 HTTP 服务；HTTPS 页面使用直传时，需要在局域网反向代理上配置
+受浏览器信任的证书，并将 `DIRECT_URL` 指向该 HTTPS 入口。
 
 Worker 只主动连云端，无需公网 IP 或入站端口。停止 GPU 不会丢任务。token 泄露时联系管理员执行 `rotate-token`；机器永久退役执行 `revoke`。

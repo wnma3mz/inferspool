@@ -185,7 +185,6 @@ async function mockBackend(page: Page, forcePassword = false) {
   const worker = {
     id: "home-4090",
     name: "home-4090",
-    capabilities: ["llm"],
     disabled_at: null,
     last_heartbeat: null,
     services: [],
@@ -475,6 +474,20 @@ test("user job lifecycle, results, multimodal input and realtime refresh", async
       hasText: "已取消",
     }),
   ).toBeVisible();
+});
+
+test("file jobs can request LAN direct delivery", async ({ page }) => {
+  await installRealtimeMock(page);
+  const state = await mockBackend(page);
+  await signIn(page);
+  await page.getByRole("tab", { name: "图片生成" }).click();
+  await page.getByLabel("任务内容").fill("LAN image");
+  await page.getByLabel("结果传输").selectOption("direct");
+  await expect(page.getByText(/结果仅在 Worker 内存短时保留/)).toBeVisible();
+  await page.getByRole("button", { name: "提交任务" }).click();
+  await expect.poll(() => state.submittedPayload?._result_delivery).toBe(
+    "direct",
+  );
 });
 
 test("invited account changes password before entering workspace", async ({ page }) => {

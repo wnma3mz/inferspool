@@ -161,9 +161,11 @@ declare created jsonb; rotated text; old_token text;
 begin
   insert into admins(user_id) values('11111111-1111-1111-1111-111111111111') on conflict do nothing;
   perform set_config('request.jwt.claim.sub','11111111-1111-1111-1111-111111111111',false);
-  created:=admin_create_worker('admin-gpu','Admin GPU','{llm,image}');
+  created:=admin_create_worker('admin-gpu','Admin GPU','{}');
   old_token:=created->>'token';
   perform assert(length(old_token)>20,'worker creation returns a one-time token');
+  perform assert((select capabilities='{}' from workers where id='admin-gpu'),
+                 'worker creation does not require static capabilities');
   perform assert((select token_hash<>old_token and token_hash=extensions.crypt(old_token,token_hash) from workers where id='admin-gpu'),
                  'worker stores only a bcrypt token hash');
   rotated:=admin_rotate_worker_token('admin-gpu');
@@ -211,6 +213,8 @@ declare claimed_users int;
 begin
   truncate jobs cascade;
   update workers set disabled_at=null,last_heartbeat=now() where id='gpu-product';
+  perform report_services('gpu-product','worker-token',jsonb_build_array(
+    jsonb_build_object('type','llm','healthy',true,'capacity',2)));
   update user_profiles set max_active_jobs=100,daily_job_limit=500 where user_id in (
     '11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222');
   insert into jobs(user_id,type,payload,priority) values

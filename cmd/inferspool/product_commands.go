@@ -164,14 +164,22 @@ func cmdAdminWorker(account *AccountClient, args []string) (int, error) {
 			if worker.LastHeartbeat != nil {
 				heartbeat = worker.LastHeartbeat.Format("2006-01-02 15:04:05")
 			}
-			fmt.Printf("%-24s %-9s %-18s %s\n", worker.ID, state, strings.Join(worker.Capabilities, ","), heartbeat)
+			var services []string
+			for _, service := range worker.Services {
+				status := "down"
+				if service.Healthy {
+					status = "up"
+				}
+				services = append(services, service.Type+":"+status)
+			}
+			fmt.Printf("%-24s %-9s %-24s %s\n", worker.ID, state, strings.Join(services, ","), heartbeat)
 		}
 		return 0, nil
 	case "create":
 		if len(args) < 2 {
 			return 1, errorsForUsage("admin worker create needs an id")
 		}
-		name, types := args[1], []string{"llm"}
+		name := args[1]
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
 			case "--name":
@@ -180,17 +188,11 @@ func cmdAdminWorker(account *AccountClient, args []string) (int, error) {
 				}
 				i++
 				name = args[i]
-			case "--types":
-				if i+1 >= len(args) {
-					return 1, errorsForUsage("--types needs a value")
-				}
-				i++
-				types = strings.Split(args[i], ",")
 			default:
 				return 1, fmt.Errorf("unknown worker flag %q", args[i])
 			}
 		}
-		created, err := account.AdminCreateWorker(args[1], name, types)
+		created, err := account.AdminCreateWorker(args[1], name)
 		if err != nil {
 			return 1, err
 		}

@@ -39,8 +39,11 @@ export interface Job {
 }
 
 export interface ResultFile {
-  bucket: string;
-  path: string;
+	bucket?: string;
+	path?: string;
+	url?: string;
+	delivery?: "cloud" | "direct";
+	expires_at?: string;
   filename: string;
   mime: string;
   bytes: number;
@@ -73,7 +76,6 @@ export interface QueueStats {
   services: Record<string, ServiceStat>;
   workers: {
     id: string | null;
-    capabilities: string[] | null;
     online: boolean;
     services: WorkerService[] | null;
   }[];

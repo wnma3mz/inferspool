@@ -54,7 +54,7 @@ def wait_status(job_id: str, wanted: str, timeout: float) -> bool:
 def main() -> int:
     _, pg_url = serve_pg()
     _, llm_url = stubs.serve_llm()
-    reset_db(capabilities="{llm}")
+    reset_db()
     job_id = enqueue("llm", {"prompt": "long running"})
     stubs.LlmState.tokens = 400
     stubs.LlmState.token_delay = 0.05

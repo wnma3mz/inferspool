@@ -87,6 +87,7 @@ type ServiceRegistry struct {
 	nextProbe map[string]time.Time
 	wasOK     map[string]bool
 	http      *http.Client
+	direct    bool
 }
 
 func NewServiceRegistry(specs []ServiceSpec) *ServiceRegistry {
@@ -110,6 +111,12 @@ func (r *ServiceRegistry) Types() []string {
 	}
 	sort.Strings(types)
 	return types
+}
+
+func (r *ServiceRegistry) EnableDirectResults(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.direct = enabled
 }
 
 func (r *ServiceRegistry) Spec(t string) (ServiceSpec, bool) {
@@ -176,6 +183,11 @@ func (r *ServiceRegistry) Check(ctx context.Context, jobType string, force bool)
 
 func (r *ServiceRegistry) probe(ctx context.Context, spec ServiceSpec) ServiceHealth {
 	h := ServiceHealth{Type: spec.Type, Name: spec.Name, Capacity: spec.Capacity, BaseURL: spec.BaseURL, Models: []string{}, ParameterSchema: parameterSchema(spec.Type)}
+	deliveries := []string{"cloud"}
+	if r.direct {
+		deliveries = append(deliveries, "direct")
+	}
+	h.ParameterSchema["_result_delivery"] = ParameterRange{Type: "string", Enum: deliveries}
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(probeCtx, http.MethodGet, spec.BaseURL+spec.HealthPath, nil)

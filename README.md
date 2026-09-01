@@ -55,6 +55,7 @@ inferspool password                         # 首次登录更换临时密码
 inferspool submit llm "解释数据库租约" --wait
 inferspool submit llm "比较两张图" --image a.jpg --image https://example.com/b.png -w
 inferspool submit image "一只猫骑自行车" --size 1024x1024
+inferspool submit image "一只猫骑自行车" --direct --wait
 inferspool submit video "城市上空的云" --seconds 5 --fps 24
 inferspool submit tts "请朗读这段话" --voice default --format wav
 
@@ -68,6 +69,7 @@ inferspool delete <job-id>
 首次改密后 CLI 会自动创建本机 API key。脚本和 CI 可设置 `INFERSPOOL_API_KEY`，不需要保存账号密码。`--wait` 成功时退出 0，失败时退出 1。
 
 用户只选择任务类型和通用生成参数，不指定具体模型；模型由执行任务的 GPU Worker 及其本地后端决定。
+图片、视频和语音任务加 `--direct` 时，只会由支持局域网直传的 Worker 执行；结果不上传云端 Storage。默认不加该参数时使用私有云存储。
 
 ## GPU Worker 快速开始
 
@@ -84,6 +86,8 @@ INFERSPOOL_IMAGE_URL=http://127.0.0.1:8091
 inferspool-worker doctor --env-file worker.env
 inferspool-worker run --env-file worker.env
 ```
+
+Worker 会自动探活这些端点并上报当前能力。云端只向最近上报为健康的服务派发任务；新增一种现有任务类型时，只需增加对应 URL 并重启 Worker，无需修改云端 Worker 类型。
 
 默认由 GPU 用户自行管理 vLLM / vLLM-Omni。也可以为某种任务配置按需启动：
 

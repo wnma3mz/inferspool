@@ -196,6 +196,16 @@ func (r *Runner) Run(ctx context.Context) {
 		var live []string
 		for _, jobType := range queued {
 			if r.ready(ctx, jobType) {
+				// An on-demand service may have changed from down to healthy in
+				// ready(). Publish that transition before claim_jobs atomically
+				// checks the cloud service registry.
+				if r.supervisor != nil && r.supervisor.Manages(jobType) {
+					healths = r.registry.CheckAll(ctx, true)
+					if err := r.reportNow(ctx, healths); err != nil {
+						log.Printf("service report failed before claim(%s): %v", jobType, err)
+						continue
+					}
+				}
 				live = append(live, jobType)
 			}
 		}
@@ -251,11 +261,17 @@ func (r *Runner) maybeReport(ctx context.Context, healths []ServiceHealth) {
 	if time.Since(r.lastReport) < r.cfg.ReportEvery {
 		return
 	}
-	if err := r.client.ReportServices(ctx, healths); err != nil {
+	if err := r.reportNow(ctx, healths); err != nil {
 		log.Printf("service report failed: %v", err)
-		return
+	}
+}
+
+func (r *Runner) reportNow(ctx context.Context, healths []ServiceHealth) error {
+	if err := r.client.ReportServices(ctx, healths); err != nil {
+		return err
 	}
 	r.lastReport = time.Now()
+	return nil
 }
 
 func (r *Runner) reportOffline(ctx context.Context) {
