@@ -23,9 +23,14 @@ inferspool_find_psql() {
   return 1
 }
 
-# Put the discovered install first on PATH, so createdb/dropdb resolve too.
+# Add the discovered install only when it is not already on PATH, so
+# createdb/dropdb resolve without shadowing tools installed earlier by CI.
 inferspool_setup_pg() {
-  local psql_path
+  local psql_path pg_bin
   psql_path="$(inferspool_find_psql)" || return 1
-  export PATH="$(dirname "$psql_path"):$PATH"
+  pg_bin="$(dirname "$psql_path")"
+  case ":$PATH:" in
+    *":$pg_bin:"*) ;;
+    *) export PATH="$pg_bin:$PATH" ;;
+  esac
 }

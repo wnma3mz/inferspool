@@ -27,6 +27,9 @@ run() {  # run <label> <command...>
 command -v uv >/dev/null || { echo "uv is required (https://docs.astral.sh/uv/)"; exit 1; }
 uv sync --frozen --quiet || exit 1
 
+section "test environment"
+run "postgres-path" ./supabase/tests/lib_test.sh
+
 section "resetting $DB"
 dropdb --if-exists "$DB"
 createdb "$DB"
